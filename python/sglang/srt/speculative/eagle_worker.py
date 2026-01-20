@@ -49,6 +49,7 @@ from sglang.srt.speculative.spec_utils import (
     load_token_map,
     select_top_k_tokens,
 )
+from sglang.srt.utils.common import fast_sampling
 from sglang.srt.utils import (
     empty_context,
     get_available_gpu_memory,
@@ -501,7 +502,7 @@ class EAGLEWorker(TpModelWorker):
             forward_batch
         )
         if can_cuda_graph:
-            parent_list, top_scores_index, draft_tokens = self.cuda_graph_runner.replay(
+            parent_list, top_scores_index, draft_tokens, token_prob_list = self.cuda_graph_runner.replay(
                 forward_batch
             )
         else:
@@ -513,7 +514,7 @@ class EAGLEWorker(TpModelWorker):
                 # Skip attention backend init for idle mode or 1-step draft
                 self.draft_attn_backend.init_forward_metadata(forward_batch)
             # Run forward steps
-            parent_list, top_scores_index, draft_tokens = self.draft_forward(
+            parent_list, top_scores_index, draft_tokens, token_prob_list = self.draft_forward(
                 forward_batch
             )
 
@@ -582,11 +583,13 @@ class EAGLEWorker(TpModelWorker):
         # Return values
         score_list: List[torch.Tensor] = []
         token_list: List[torch.Tensor] = []
+        token_prob_list: List[torch.Tensor] = []
         parents_list: List[torch.Tensor] = []
 
         # Forward multiple steps
         scores = None
         for i in range(self.speculative_num_steps):
+            token_prob_list.append(topk_p)
             input_ids, hidden_states, scores, tree_info = select_top_k_tokens(
                 i, topk_p, topk_index, hidden_states, scores, self.topk
             )
@@ -604,7 +607,7 @@ class EAGLEWorker(TpModelWorker):
             # speculative decoding and the draft model architecture is gpt-oss. gpt-oss
             # rope kernel needs cache_loc to be contiguous.
             if (
-                self.server_args.speculative_algorithm == "STANDALONE"
+                self.server_args.speculative_algorithm in ("STANDALONE", "STANDALONE_OPD")
                 and self.model_config.hf_config.architectures[0] == "GptOssForCausalLM"
             ):
                 out_cache_loc = out_cache_loc.contiguous()
@@ -619,8 +622,15 @@ class EAGLEWorker(TpModelWorker):
             )
             if self.server_args.enable_nan_detection:
                 detect_nan(logits_output)
-            probs = torch.softmax(logits_output.next_token_logits, dim=-1)
-            topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
+            if self.server_args.speculative_algorithm == "STANDALONE_OPD":
+                topk_p, topk_index = fast_sampling(
+                    logits_output.next_token_logits, 
+                    forward_batch.sampling_info.top_ks,
+                    forward_batch.sampling_info.top_ps,
+                    forward_batch.sampling_info.temperatures)
+            else:
+                probs = torch.softmax(logits_output.next_token_logits, dim=-1)
+                topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
             if self.hot_token_id is not None:
                 topk_index = self.hot_token_id[topk_index]
             hidden_states = logits_output.hidden_states
@@ -628,8 +638,11 @@ class EAGLEWorker(TpModelWorker):
         parent_list, top_scores_index, draft_tokens = organize_draft_results(
             score_list, token_list, parents_list, self.speculative_num_draft_tokens
         )
+        token_prob_list = torch.stack(token_prob_list, dim=0)
+        token_prob_list = token_prob_list.permute(1, 0, 2)
+        token_prob_list = token_prob_list.squeeze(-1)
 
-        return parent_list, top_scores_index, draft_tokens
+        return parent_list, top_scores_index, draft_tokens, token_prob_list
 
     def clear_cache_pool(self):
         # allocator and kv cache pool are shared with target worker

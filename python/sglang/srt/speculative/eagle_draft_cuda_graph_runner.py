@@ -29,6 +29,7 @@ from sglang.srt.utils import (
     require_mlp_sync,
     require_mlp_tp_gather,
 )
+from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 
 if TYPE_CHECKING:
     from sglang.srt.speculative.eagle_worker import EAGLEWorker
@@ -225,6 +226,18 @@ class EAGLEDraftCudaGraphRunner:
             hidden_states=hidden_states,
             capture_hidden_mode=CaptureHiddenMode.LAST,
         )
+        
+        sampling_info = SamplingBatchInfo(
+            temperatures=torch.ones((num_seqs, 1), device=self.input_ids.device),
+            top_ps=torch.ones((num_seqs,), device=self.input_ids.device),
+            top_ks=torch.ones((num_seqs,), device=self.input_ids.device),
+            min_ps=None,
+            is_all_greedy=False,
+            need_top_k_sampling=False,
+            need_top_p_sampling=False,
+            need_min_p_sampling=False,
+            vocab_size=1,
+        )
 
         # Forward batch
         forward_batch = ForwardBatch(
@@ -248,6 +261,7 @@ class EAGLEDraftCudaGraphRunner:
             global_dp_buffer_len=global_dp_buffer_len,
             spec_algorithm=self.model_runner.spec_algorithm,
             spec_info=spec_info,
+            sampling_info=sampling_info,
             capture_hidden_mode=(
                 spec_info.capture_hidden_mode if spec_info else CaptureHiddenMode.NULL
             ),

@@ -168,7 +168,7 @@ class SpeculativeAlgorithm(metaclass=_SpeculativeAlgorithmMeta):
         return self._has_flag("EAGLE3")
 
     def is_standalone(self) -> bool:
-        return self._has_flag("STANDALONE")
+        return self._has_flag("STANDALONE") or self._has_flag("STANDALONE_OPD")
 
     def is_ngram(self) -> bool:
         return self._has_flag("NGRAM")
@@ -189,6 +189,7 @@ _FLAG_MARKERS: Dict[str, Callable[[Union[SpeculativeAlgorithm, str]], None]] = {
         "STANDALONE", algorithm
     ),
     "NGRAM": lambda algorithm: SpeculativeAlgorithm._add_flag("NGRAM", algorithm),
+    "STANDALONE_OPD": lambda algorithm: SpeculativeAlgorithm._add_flag("STANDALONE_OPD", algorithm),
 }
 
 
@@ -307,7 +308,8 @@ register_speculative_algorithm(
 register_speculative_algorithm(
     "STANDALONE",
     worker_cls=_create_standalone_worker,
-    flags=("STANDALONE",),
+    flags=("STANDALONE", "STANDALONE_OPD"),
+    aliases=("STANDALONE_OPD",),
 )
 
 register_speculative_algorithm(

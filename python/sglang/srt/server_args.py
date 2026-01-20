@@ -812,7 +812,7 @@ class ServerArgs:
                 reserved_mem = max(reserved_mem, 10 * 1024)
 
             if self.speculative_algorithm is not None:
-                if self.speculative_algorithm == "STANDALONE":
+                if self.speculative_algorithm in ("STANDALONE", "STANDALONE_OPD"):
                     # standalonedraft model and cuda graphs
                     reserved_mem += 6 * 1024
                 elif self.speculative_algorithm != "NGRAM":
@@ -1503,8 +1503,8 @@ class ServerArgs:
         if self.speculative_algorithm == "NEXTN":
             self.speculative_algorithm = "EAGLE"
 
-        if self.speculative_algorithm in ("EAGLE", "EAGLE3", "STANDALONE"):
-            if self.speculative_algorithm == "STANDALONE" and self.enable_dp_attention:
+        if self.speculative_algorithm in ("EAGLE", "EAGLE3", "STANDALONE", "STANDALONE_OPD"):
+            if self.speculative_algorithm in ("STANDALONE", "STANDALONE_OPD") and self.enable_dp_attention:
                 # TODO: support dp attention for standalone speculative decoding
                 raise ValueError(
                     "Currently standalone speculative decoding does not support dp attention."
@@ -2677,7 +2677,7 @@ class ServerArgs:
         parser.add_argument(
             "--speculative-algorithm",
             type=str,
-            choices=["EAGLE", "EAGLE3", "NEXTN", "STANDALONE", "NGRAM"],
+            choices=["EAGLE", "EAGLE3", "NEXTN", "STANDALONE", "STANDALONE_OPD", "NGRAM"],
             help="Speculative algorithm.",
         )
         parser.add_argument(
@@ -4167,7 +4167,7 @@ def auto_choose_speculative_params(self: ServerArgs):
     """
     hf_config = self.get_hf_config()
     arch = hf_config.architectures[0]
-    if self.speculative_algorithm == "STANDALONE":
+    if self.speculative_algorithm in ("STANDALONE", "STANDALONE_OPD"):
         # The default value for standalone speculative decoding
         return (3, 1, 4)
     if arch in ["LlamaForCausalLM"]:
