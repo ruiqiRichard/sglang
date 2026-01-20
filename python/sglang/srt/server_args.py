@@ -1502,6 +1502,11 @@ class ServerArgs:
     def _handle_speculative_decoding(self):
         if self.speculative_algorithm == "NEXTN":
             self.speculative_algorithm = "EAGLE"
+        
+        if self.speculative_algorithm == "STANDALONE_OPD":
+            target_path = self.model_path
+            self.model_path = self.speculative_draft_model_path
+            self.speculative_draft_model_path = target_path
 
         if self.speculative_algorithm in ("EAGLE", "EAGLE3", "STANDALONE", "STANDALONE_OPD"):
             if self.speculative_algorithm in ("STANDALONE", "STANDALONE_OPD") and self.enable_dp_attention:
@@ -2683,6 +2688,7 @@ class ServerArgs:
         parser.add_argument(
             "--speculative-draft-model-path",
             "--speculative-draft-model",
+            "--speculative-opd-teacher-model",
             type=str,
             help="The path of the draft model weights. This can be a local folder or a Hugging Face repo ID.",
         )
