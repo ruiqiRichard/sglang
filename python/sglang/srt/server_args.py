@@ -1568,7 +1568,12 @@ class ServerArgs:
                     self.speculative_eagle_topk,
                     self.speculative_num_draft_tokens,
                 ) = auto_choose_speculative_params(self)
-
+            if self.speculative_algorithm == "STANDALONE_OPD":
+                if self.speculative_eagle_topk > 1:
+                    logging.warning(
+                        "speculative_eagle_topk is forced to 1 for STANDALONE_OPD speculative decoding."
+                    )
+                self.speculative_eagle_topk = 1
             if (
                 self.attention_backend == "trtllm_mha"
                 or self.decode_attention_backend == "trtllm_mha"

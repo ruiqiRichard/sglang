@@ -502,7 +502,7 @@ class EAGLEWorker(TpModelWorker):
             forward_batch
         )
         if can_cuda_graph:
-            parent_list, top_scores_index, draft_tokens, token_prob_list = self.cuda_graph_runner.replay(
+            parent_list, top_scores_index, draft_tokens, draft_token_probs = self.cuda_graph_runner.replay(
                 forward_batch
             )
         else:
@@ -514,7 +514,7 @@ class EAGLEWorker(TpModelWorker):
                 # Skip attention backend init for idle mode or 1-step draft
                 self.draft_attn_backend.init_forward_metadata(forward_batch)
             # Run forward steps
-            parent_list, top_scores_index, draft_tokens, token_prob_list = self.draft_forward(
+            parent_list, top_scores_index, draft_tokens, draft_token_probs = self.draft_forward(
                 forward_batch
             )
 
@@ -546,6 +546,7 @@ class EAGLEWorker(TpModelWorker):
 
         return EagleVerifyInput(
             draft_token=draft_tokens,
+            draft_token_probs=draft_token_probs,
             custom_mask=tree_mask,
             positions=position,
             retrive_index=retrive_index,
@@ -709,6 +710,7 @@ class EAGLEWorker(TpModelWorker):
             self.token_to_kv_pool_allocator,
             self.page_size,
             vocab_mask,
+            speculative_opd=self.server_args.speculative_algorithm == "STANDALONE_OPD",
         )
 
         # Post process based on verified outputs.

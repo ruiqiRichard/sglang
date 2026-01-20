@@ -38,7 +38,7 @@ from sglang.srt.speculative.spec_utils import (
     get_src_tgt_cache_loc,
     get_target_cache_loc,
 )
-from sglang.srt.utils import is_cuda, is_npu, next_power_of_2
+from sglang.srt.utils import is_cuda, is_npu, next_power_of_2, peak_kl_rejection
 
 _is_npu = is_npu()
 
@@ -68,6 +68,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
     seq_lens_sum: int
     seq_lens_cpu: torch.Tensor
     grammar: BaseGrammarObject = None
+    draft_token_probs: torch.Tensor = None
 
     def __post_init__(self):
         super().__init__(SpecInputType.EAGLE_VERIFY)
@@ -195,6 +196,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
         page_size: int,
         vocab_mask: Optional[torch.Tensor] = None,  # For grammar
+        speculative_opd: bool = False
     ) -> torch.Tensor:
         """
         Verify and find accepted tokens based on logits output and batch
@@ -320,35 +322,40 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     ),
                 )
             target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
+            
+            if speculative_opd:
+                draft_probs = self.draft_token_probs.reshape(bs, self.draft_token_num - 1, -1)
+                reject_indices = peak_kl_rejection(draft_probs=draft_probs, target_probs=target_probs[:, :-1, :])
+                
+            # else:
+                draft_probs = torch.zeros(
+                    target_probs.shape, dtype=torch.float32, device=batch.device
+                )
 
-            draft_probs = torch.zeros(
-                target_probs.shape, dtype=torch.float32, device=batch.device
-            )
-
-            # coins for rejection sampling
-            coins = torch.rand_like(
-                candidates, dtype=torch.float32, device=batch.device
-            )
-            # coins for final sampling
-            coins_for_final_sampling = torch.rand(
-                (bs,), dtype=torch.float32, device=batch.device
-            )
-            tree_speculative_sampling_target_only(
-                predicts=predict,  # mutable
-                accept_index=accept_index,  # mutable
-                accept_token_num=accept_length,  # mutable
-                candidates=candidates,
-                retrive_index=self.retrive_index,
-                retrive_next_token=self.retrive_next_token,
-                retrive_next_sibling=self.retrive_next_sibling,
-                uniform_samples=coins,
-                uniform_samples_for_final_sampling=coins_for_final_sampling,
-                target_probs=target_probs,
-                draft_probs=draft_probs,
-                threshold_single=get_global_server_args().speculative_accept_threshold_single,
-                threshold_acc=get_global_server_args().speculative_accept_threshold_acc,
-                deterministic=True,
-            )
+                # coins for rejection sampling
+                coins = torch.rand_like(
+                    candidates, dtype=torch.float32, device=batch.device
+                )
+                # coins for final sampling
+                coins_for_final_sampling = torch.rand(
+                    (bs,), dtype=torch.float32, device=batch.device
+                )
+                tree_speculative_sampling_target_only(
+                    predicts=predict,  # mutable
+                    accept_index=accept_index,  # mutable
+                    accept_token_num=accept_length,  # mutable
+                    candidates=candidates,
+                    retrive_index=self.retrive_index,
+                    retrive_next_token=self.retrive_next_token,
+                    retrive_next_sibling=self.retrive_next_sibling,
+                    uniform_samples=coins,
+                    uniform_samples_for_final_sampling=coins_for_final_sampling,
+                    target_probs=target_probs,
+                    draft_probs=draft_probs,
+                    threshold_single=get_global_server_args().speculative_accept_threshold_single,
+                    threshold_acc=get_global_server_args().speculative_accept_threshold_acc,
+                    deterministic=True,
+                )
 
         if SIMULATE_ACC_LEN > 0.0:
             # Do simulation

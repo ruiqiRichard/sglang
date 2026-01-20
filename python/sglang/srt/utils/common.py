@@ -2566,6 +2566,24 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
 
     return chosen_p, chosen_indices
 
+def peak_kl_rejection(draft_probs, target_probs, kl_ratio=0.8, height=0.5):
+    ratios = 1.0 - (target_probs / (draft_probs + 1e-10))
+    
+    ratios = F.pad(ratios, (1, 1), mode='constant', value=-1e30)
+    left   = ratios[:, :-2]
+    center = ratios[:, 1:-1] 
+    right  = ratios[:, 2:]
+    
+    is_peak = (center - left >= kl_ratio) & (center - right >= kl_ratio)
+    is_peak = is_peak & (center >= height)
+    
+    first_indices = torch.argmax(is_peak.to(torch.int8), dim=1)
+    has_peak = is_peak.any(dim=1)
+
+    reject_indices = torch.where(has_peak, first_indices, torch.tensor(-1, device=ratios.device))
+    
+    return reject_indices
+    
 def bind_or_assign(target, source):
     if target is not None:
         target.copy_(source)
