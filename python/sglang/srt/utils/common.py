@@ -89,6 +89,7 @@ from torch.library import Library
 from torch.profiler import ProfilerActivity, profile, record_function
 from torch.utils._contextlib import _DecoratorContextManager
 from typing_extensions import Literal
+import torch.nn.functional as F
 
 from sglang.srt.environ import envs
 from sglang.srt.metrics.func_timer import enable_func_timer
@@ -121,6 +122,11 @@ builtins.FP8_E4M3_MIN = FP8_E4M3_MIN
 def is_cuda():
     return torch.cuda.is_available() and torch.version.cuda
 
+if is_cuda():
+    from sgl_kernel import (
+        top_k_renorm_prob,
+        top_p_renorm_prob,
+    )
 
 def is_cuda_alike():
     return is_cuda() or is_hip()
@@ -2537,37 +2543,26 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
         top_ps: (batch_size,) - Tensor of floats, individual top_p per batch
         temperatures: (batch_size, 1) - Tensor of floats
     """
-    vocab_size = logits.shape[-1]
-    device = logits.device
-
     # apply temperature
-    if temperatures is not None:
-        temp_b = temperatures.view(-1, 1).clamp(min=1e-5)
-        logits = logits / temp_b
-    probs = torch.softmax(logits, dim=-1)
+    probs = F.softmax(
+        logits / temperatures, dim=-1
+    )
 
     # top-k filtering
-    sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
-    vocab_range = torch.arange(vocab_size, device=device).unsqueeze(0)
-    k_mask = vocab_range >= top_ks.view(-1, 1)
-    sorted_probs[k_mask] = 0.0
+    probs = top_k_renorm_prob(
+        probs,
+        top_ks,
+    )
 
     # top-p filtering
-    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-    p_mask = cumulative_probs > top_ps.view(-1, 1)
-    p_mask[..., 1:] = p_mask[..., :-1].clone()
-    p_mask[..., 0] = 0 
-    sorted_probs[p_mask] = 0.0
-
-    # renormalize
-    sum_probs = sorted_probs.sum(dim=-1, keepdim=True)
-    sum_probs = torch.where(sum_probs == 0, torch.ones_like(sum_probs), sum_probs)
-    sorted_probs = sorted_probs / sum_probs
+    probs = top_p_renorm_prob(
+        probs,
+        top_ps,
+    )
 
     # sample
-    sampled_sorted_idx = torch.multinomial(sorted_probs, num_samples=1)
-    chosen_indices = torch.gather(sorted_indices, -1, sampled_sorted_idx)
-    chosen_p = torch.gather(sorted_probs, -1, sampled_sorted_idx)
+    chosen_indices = torch.multinomial(probs, num_samples=1)
+    chosen_p = torch.gather(probs, -1, chosen_indices)
 
     return chosen_p, chosen_indices
 
