@@ -350,10 +350,16 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     temp_predict, 
                     torch.tensor(-1, device=batch.device, dtype=torch.int32)
                 )
+                
+                batch_offsets = (
+                    torch.arange(bs, device=batch.device, dtype=torch.int32)
+                    * self.draft_token_num
+                ).unsqueeze(1)
+                global_indices = step_indices + batch_offsets
                 accept_index = torch.where(
                     valid_mask,
-                    step_indices,
-                    torch.tensor(-1, device=batch.device, dtype=torch.int32)
+                    global_indices,
+                    torch.full_like(global_indices, -1),
                 )
                 flat_temp = temp_predict.flatten()
                 valid_mask = flat_temp != pad_value
