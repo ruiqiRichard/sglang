@@ -324,10 +324,42 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
             target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
             
             if speculative_opd:
-                draft_probs = self.draft_token_probs.reshape(bs, self.draft_token_num - 1, -1)
-                reject_indices = peak_kl_rejection(draft_probs=draft_probs, target_probs=target_probs[:, :-1, :])
+                draft_token_probs = self.draft_token_probs.reshape(bs, self.spec_steps, -1)
+                target_token_probs = torch.gather(
+                    target_probs[:, :self.spec_steps, :],
+                    dim=-1,
+                    index=candidates[:, 1:self.spec_steps+1].unsqueeze(-1),
+                )
+                reject_indices = peak_kl_rejection(draft_probs=draft_token_probs, target_probs=target_token_probs)
+                reject_indices = reject_indices.view(-1, 1)
+                accept_length = (reject_indices).squeeze(1).to(torch.int32).clamp(max=self.spec_steps-1)
+                vocab_size = target_probs.size(-1)
+                gather_indices = reject_indices.unsqueeze(-1).expand(-1, -1, vocab_size)
+                correction_probs = torch.gather(target_probs, 1, gather_indices).squeeze(1)
+                corrected_token = torch.multinomial(correction_probs, num_samples=1, replacement=True)
                 
-            # else:
+                pad_value = torch.tensor(-1, device=batch.device, dtype=torch.int32)
+                temp_predict = torch.full((bs, self.draft_token_num), pad_value, dtype=torch.int32, device=batch.device)
+                temp_predict[:, :self.spec_steps] = candidates[:, 1:self.spec_steps+1]
+                temp_predict.scatter_(dim=1, index=reject_indices, src=corrected_token.to(torch.int32))
+                step_indices = torch.arange(self.draft_token_num, device=batch.device, dtype=torch.int32).unsqueeze(0)
+                valid_mask = (step_indices <= reject_indices) & (step_indices < self.spec_steps)
+
+                temp_predict = torch.where(
+                    valid_mask, 
+                    temp_predict, 
+                    torch.tensor(-1, device=batch.device, dtype=torch.int32)
+                )
+                accept_index = torch.where(
+                    valid_mask,
+                    step_indices,
+                    torch.tensor(-1, device=batch.device, dtype=torch.int32)
+                )
+                flat_temp = temp_predict.flatten()
+                valid_mask = flat_temp != pad_value
+                predict[:bs * self.draft_token_num][valid_mask] = flat_temp[valid_mask]
+                
+            else:
                 draft_probs = torch.zeros(
                     target_probs.shape, dtype=torch.float32, device=batch.device
                 )
