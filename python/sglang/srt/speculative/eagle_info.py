@@ -196,7 +196,10 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
         page_size: int,
         vocab_mask: Optional[torch.Tensor] = None,  # For grammar
-        speculative_opd: bool = False
+        speculative_opd: bool = False,
+        teacher_greedy: bool = False,
+        speculative_opd_peak_threshold: float = 0.0,
+        speculative_opd_peak_height: float = 0.0,
     ) -> torch.Tensor:
         """
         Verify and find accepted tokens based on logits output and batch
@@ -324,46 +327,64 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
             target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
             
             if speculative_opd:
-                draft_token_probs = self.draft_token_probs.reshape(bs, self.spec_steps, -1)
-                target_token_probs = torch.gather(
-                    target_probs[:, :self.spec_steps, :],
-                    dim=-1,
-                    index=candidates[:, 1:self.spec_steps+1].unsqueeze(-1),
-                )
-                reject_indices = peak_kl_rejection(draft_probs=draft_token_probs, target_probs=target_token_probs)
-                reject_indices = reject_indices.view(-1, 1)
-                accept_length = (reject_indices).squeeze(1).to(torch.int32).clamp(max=self.spec_steps-1)
-                vocab_size = target_probs.size(-1)
-                gather_indices = reject_indices.unsqueeze(-1).expand(-1, -1, vocab_size)
-                correction_probs = torch.gather(target_probs, 1, gather_indices).squeeze(1)
-                corrected_token = torch.multinomial(correction_probs, num_samples=1, replacement=True)
-                
-                pad_value = torch.tensor(-1, device=batch.device, dtype=torch.int32)
-                temp_predict = torch.full((bs, self.draft_token_num), pad_value, dtype=torch.int32, device=batch.device)
-                temp_predict[:, :self.spec_steps] = candidates[:, 1:self.spec_steps+1]
-                temp_predict.scatter_(dim=1, index=reject_indices, src=corrected_token.to(torch.int32))
-                step_indices = torch.arange(self.draft_token_num, device=batch.device, dtype=torch.int32).unsqueeze(0)
-                valid_mask = (step_indices <= reject_indices) & (step_indices < self.spec_steps)
+                device = batch.device
+                bs = candidates.size(0)
+                spec_steps = self.spec_steps
+                draft_token_num = self.draft_token_num
+                pad_value = -1
 
-                temp_predict = torch.where(
-                    valid_mask, 
-                    temp_predict, 
-                    torch.tensor(-1, device=batch.device, dtype=torch.int32)
+                draft_token_probs = self.draft_token_probs.view(bs, spec_steps, -1)
+
+                cand_idx = candidates[:, 1:spec_steps + 1].to(torch.long)  # gather index必须long
+                target_token_probs = target_probs[:, :spec_steps, :].gather(
+                    dim=-1, index=cand_idx.unsqueeze(-1)
+                )  # [bs, spec_steps, 1]
+
+                reject_indices = peak_kl_rejection(
+                    draft_probs=draft_token_probs,
+                    target_probs=target_token_probs,
+                    threshold=speculative_opd_peak_threshold,
+                    height=speculative_opd_peak_height,
+                ).view(bs)  # [bs]
+
+                accept_length = reject_indices.to(torch.int32).clamp(max=spec_steps - 1)  # [bs]
+
+                row = torch.arange(bs, device=device)
+                ri = accept_length.to(torch.long)  # [bs]
+                correction_probs = target_probs[row, ri]  # [bs, vocab]
+
+                if teacher_greedy:
+                    corrected_token = correction_probs.argmax(dim=-1, keepdim=True).to(torch.int32)  # [bs,1]
+                else:
+                    corrected_token = torch.multinomial(correction_probs, num_samples=1, replacement=True).to(torch.int32)
+                    
+                temp_predict = torch.full(
+                    (bs, draft_token_num),
+                    pad_value,
+                    dtype=torch.int32,
+                    device=device,
                 )
-                
-                batch_offsets = (
-                    torch.arange(bs, device=batch.device, dtype=torch.int32)
-                    * self.draft_token_num
-                ).unsqueeze(1)
-                global_indices = step_indices + batch_offsets
+                temp_predict[:, :spec_steps] = candidates[:, 1:spec_steps + 1].to(torch.int32)
+                temp_predict.scatter_(dim=1, index=ri.view(bs, 1), src=corrected_token)
+
+                step_indices = torch.arange(draft_token_num, device=device, dtype=torch.long).unsqueeze(0)  # [1, draft_token_num]
+                ri2 = ri.unsqueeze(1)  # [bs,1]
+                valid_pos_mask = (step_indices <= ri2) & (step_indices < spec_steps)  # [bs, draft_token_num]
+
+                temp_predict.masked_fill_(~valid_pos_mask, pad_value)
+
+                batch_offsets = (torch.arange(bs, device=device, dtype=torch.long) * draft_token_num).unsqueeze(1)  # [bs,1]
+                global_indices = step_indices + batch_offsets  # [bs, draft_token_num]
                 accept_index = torch.where(
-                    valid_mask,
+                    valid_pos_mask,
                     global_indices,
-                    torch.full_like(global_indices, -1),
-                )
-                flat_temp = temp_predict.flatten()
-                valid_mask = flat_temp != pad_value
-                predict[:bs * self.draft_token_num][valid_mask] = flat_temp[valid_mask]
+                    torch.full_like(global_indices, pad_value),
+                )  # [bs, draft_token_num]
+
+                flat_temp = temp_predict.view(-1)
+                m = flat_temp.ne(pad_value)
+                predict_view = predict[: bs * draft_token_num]
+                predict_view[m] = flat_temp[m]
                 
             else:
                 draft_probs = torch.zeros(

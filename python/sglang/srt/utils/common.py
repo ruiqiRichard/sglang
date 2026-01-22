@@ -2566,7 +2566,7 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
 
     return chosen_p, chosen_indices
 
-def peak_kl_rejection(draft_probs, target_probs, kl_ratio=0.8, height=0.5):
+def peak_kl_rejection(draft_probs, target_probs, threshold=0.8, height=0.5):
     draft_probs = draft_probs.squeeze(-1)
     target_probs = target_probs.squeeze(-1)
     log_p_diff = torch.log(target_probs + 1e-10) - torch.log(draft_probs + 1e-10)
@@ -2577,7 +2577,7 @@ def peak_kl_rejection(draft_probs, target_probs, kl_ratio=0.8, height=0.5):
     center = ratios[:, 1:-1] 
     right  = ratios[:, 2:]
     
-    is_peak = (center - left >= kl_ratio) & (center - right >= kl_ratio)
+    is_peak = (center - left >= threshold) & (center - right >= threshold)
     is_peak = is_peak & (center >= height)
     
     first_indices = torch.argmax(is_peak.to(torch.int8), dim=1)
