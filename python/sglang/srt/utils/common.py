@@ -2566,25 +2566,27 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
 
     return chosen_p, chosen_indices
 
+@torch.compile(dynamic=True)
 def peak_kl_rejection(draft_probs, target_probs, threshold=0.8, height=0.5):
-    draft_probs = draft_probs.squeeze(-1)
-    target_probs = target_probs.squeeze(-1)
-    log_p_diff = torch.log(target_probs + 1e-10) - torch.log(draft_probs + 1e-10)
-    ratios = 1.0 - torch.exp(log_p_diff)
+    draft = draft_probs.squeeze(-1)
+    target = target_probs.squeeze(-1)
     
-    ratios = F.pad(ratios, (1, 1), mode='constant', value=-1e30)
-    left   = ratios[:, :-2]
-    center = ratios[:, 1:-1] 
-    right  = ratios[:, 2:]
-    
-    is_peak = (center - left >= threshold) & (center - right >= threshold)
-    is_peak = is_peak & (center >= height)
-    
-    first_indices = torch.argmax(is_peak.to(torch.int8), dim=1)
-    has_peak = is_peak.any(dim=1)
-    reject_indices = torch.where(has_peak, first_indices, torch.tensor(draft_probs.shape[1], device=ratios.device))
-    
-    return reject_indices
+    # numerical stability
+    eps = torch.finfo(target.dtype).tiny
+    log_p_diff = torch.log(target.clamp_min(eps)) - torch.log(draft.clamp_min(eps))
+
+    ratios = (1.0 - torch.exp(log_p_diff)).clamp_(0.0, 1.0)
+    neg_inf = -torch.finfo(ratios.dtype).max
+    ratios = F.pad(ratios, (1, 1), value=neg_inf)
+
+    left, center, right = ratios[:, :-2], ratios[:, 1:-1], ratios[:, 2:]
+    is_peak = ((center - left) >= threshold) & ((center - right) >= threshold) & (center >= height)
+    first = is_peak.to(torch.int8).argmax(dim=1).to(torch.long)
+    has = is_peak.any(dim=1)
+
+    T = draft.size(1)
+    reject = torch.where(has, first, first.new_full((first.size(0),), T))
+    return reject
     
 def bind_or_assign(target, source):
     if target is not None:
