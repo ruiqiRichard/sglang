@@ -591,9 +591,23 @@ class EAGLEWorker(TpModelWorker):
         scores = None
         for i in range(self.speculative_num_steps):
             token_prob_list.append(topk_p)
-            input_ids, hidden_states, scores, tree_info = select_top_k_tokens(
-                i, topk_p, topk_index, hidden_states, scores, self.topk
-            )
+            if i == 0:
+                # The first step after extend
+                input_ids = topk_index.flatten()
+                hidden_states = hidden_states.repeat_interleave(self.topk, dim=0)
+                scores = topk_p  # shape: (b, topk)
+
+                tree_info = (
+                    topk_p.unsqueeze(1),  # shape: (b, 1, topk)
+                    topk_index,  # shape: (b, topk)
+                    torch.arange(-1, self.topk, dtype=torch.long, device=hidden_states.device)
+                    .unsqueeze(0)
+                    .repeat(topk_p.shape[0], 1),  # shape: (b, topk + 1)
+                )
+            else:
+                input_ids, hidden_states, scores, tree_info = select_top_k_tokens(
+                    i, topk_p, topk_index, hidden_states, scores, self.topk
+                )
             score_list.append(tree_info[0])
             token_list.append(tree_info[1])
             parents_list.append(tree_info[2])
