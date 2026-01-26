@@ -162,6 +162,8 @@ class ReqState:
     input_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
     output_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
     output_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
+    opd_evict_mask: List[int] = dataclasses.field(default_factory=list)
+    opd_teacher_logprobs_val: List[float] = dataclasses.field(default_factory=list)
 
 
 class TokenizerManager(TokenizerCommunicatorMixin):
@@ -1556,6 +1558,13 @@ class TokenizerManager(TokenizerCommunicatorMixin):
                 self.dump_requests(state, out_dict)
             if self.crash_dump_folder and state.finished and state.obj.log_metrics:
                 self.record_request_for_crash_dump(state, out_dict)
+
+    def add_evict_mask_to_meta_info(
+        self,
+        meta_info: dict,
+        state: ReqState,
+    ):
+        pass
 
     def add_logprob_to_meta_info(
         self,
