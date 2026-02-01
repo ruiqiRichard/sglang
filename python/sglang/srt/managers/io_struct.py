@@ -906,6 +906,10 @@ class BatchTokenIDOutput(
     output_token_ids_logprobs_val: List[List]
     output_token_ids_logprobs_idx: List[List]
     output_token_entropy_val: List[float]
+    
+    # opd related
+    opd_evict_mask: List[int]
+    opd_teacher_logprobs_val: List[float]
 
     # Hidden states
     output_hidden_states: List[List[float]]
@@ -985,6 +989,10 @@ class BatchStrOutput(
     output_token_ids_logprobs_val: List[List]
     output_token_ids_logprobs_idx: List[List]
     output_token_entropy_val: List[float]
+    
+    # opd related
+    opd_evict_mask: List[int]
+    opd_teacher_logprobs_val: List[float]
 
     # Hidden states
     output_hidden_states: List[List[float]]

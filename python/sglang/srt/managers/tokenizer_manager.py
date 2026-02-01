@@ -162,6 +162,8 @@ class ReqState:
     input_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
     output_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
     output_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
+    
+    # opd related
     opd_evict_mask: List[int] = dataclasses.field(default_factory=list)
     opd_teacher_logprobs_val: List[float] = dataclasses.field(default_factory=list)
 
@@ -1584,6 +1586,15 @@ class TokenizerManager(TokenizerCommunicatorMixin):
             state.output_token_logprobs_idx,
             return_text_in_logprobs,
         )
+        # opd related
+        meta_info["opd_evict_mask"] = [
+                (logprob, token_id, None)
+                for logprob, token_id in zip(state.opd_evict_mask, state.output_token_logprobs_idx)
+            ]
+        meta_info["opd_teacher_logprobs"] = [
+                (logprob, token_id, None)
+                for logprob, token_id in zip(state.opd_teacher_logprobs_val, state.output_token_logprobs_idx)
+            ]
 
         if top_logprobs_num > 0:
             meta_info["input_top_logprobs"] = self.detokenize_top_logprobs_tokens(
@@ -1636,6 +1647,11 @@ class TokenizerManager(TokenizerCommunicatorMixin):
         )
         state.output_token_logprobs_idx.extend(
             recv_obj.output_token_logprobs_idx[recv_obj_index]
+        )
+        # opd related
+        state.opd_evict_mask.extend(recv_obj.opd_evict_mask[recv_obj_index])
+        state.opd_teacher_logprobs_val.extend(
+            recv_obj.opd_teacher_logprobs_val[recv_obj_index]
         )
 
         if top_logprobs_num > 0:

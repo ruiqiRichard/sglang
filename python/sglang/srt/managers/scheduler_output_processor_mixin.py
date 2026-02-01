@@ -740,6 +740,9 @@ class SchedulerOutputProcessorMixin:
             input_token_ids_logprobs_idx = []
             output_token_ids_logprobs_val = []
             output_token_ids_logprobs_idx = []
+            # opd related
+            opd_evict_mask = []
+            opd_teacher_logprobs_val = []
         else:
             input_token_logprobs_val = input_token_logprobs_idx = (
                 output_token_logprobs_val
@@ -750,6 +753,9 @@ class SchedulerOutputProcessorMixin:
             ) = input_token_ids_logprobs_idx = output_token_ids_logprobs_val = (
                 output_token_ids_logprobs_idx
             ) = None
+            # opd related
+            opd_evict_mask = None
+            opd_teacher_logprobs_val = None
 
         for req in reqs:
             if req is skip_req:
@@ -910,6 +916,14 @@ class SchedulerOutputProcessorMixin:
                                 send_output_token_logprobs_offset:
                             ]
                         )
+                        # opd related
+                        opd_evict_mask.append(req.opd_evict_mask[
+                            send_output_token_logprobs_offset:
+                        ])
+                        opd_teacher_logprobs_val.append(req.opd_teacher_logprobs_val[
+                            send_output_token_logprobs_offset:
+                        ])
+                        
                         req.send_output_token_logprobs_offset = len(
                             req.output_token_logprobs_val
                         )
@@ -920,6 +934,9 @@ class SchedulerOutputProcessorMixin:
                         output_top_logprobs_idx.append([])
                         output_token_ids_logprobs_val.append([])
                         output_token_ids_logprobs_idx.append([])
+                        # opd related
+                        opd_evict_mask.append([])
+                        opd_teacher_logprobs_val.append([])
 
                 if req.return_hidden_states:
                     if output_hidden_states is None:
@@ -976,6 +993,8 @@ class SchedulerOutputProcessorMixin:
                     placeholder_tokens_idx=None,
                     placeholder_tokens_val=None,
                     retraction_counts=retraction_counts,
+                    opd_evict_mask=opd_evict_mask,
+                    opd_teacher_logprobs_val=opd_teacher_logprobs_val,
                 )
             )
 

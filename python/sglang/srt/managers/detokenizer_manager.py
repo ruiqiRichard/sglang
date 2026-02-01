@@ -281,6 +281,8 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
             forward_entry_time=recv_obj.forward_entry_time,
             prefill_delay=recv_obj.prefill_delay,
             prefill_latency=recv_obj.prefill_latency,
+            opd_evict_mask=recv_obj.opd_evict_mask,
+            opd_teacher_logprobs_val=recv_obj.opd_teacher_logprobs_val,
         )
 
     def handle_multimodal_decode_req(self, recv_obj: BatchMultimodalDecodeReq):

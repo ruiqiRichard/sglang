@@ -617,12 +617,18 @@ class Req:
                 Union[List[float], torch.Tensor]
             ] = []
             self.output_token_ids_logprobs_idx = []
+            # opd related
+            self.opd_evict_mask = []
+            self.opd_teacher_logprobs_val = []
         else:
             self.output_token_logprobs_val = self.output_token_logprobs_idx = (
                 self.output_top_logprobs_val
             ) = self.output_top_logprobs_idx = self.output_token_ids_logprobs_val = (
                 self.output_token_ids_logprobs_idx
             ) = None
+            # opd related
+            self.opd_evict_mask = None
+            self.opd_teacher_logprobs_val = None
         self.hidden_states: List[List[float]] = []
         self.hidden_states_tensor = None  # Note: use tensor instead of list to transfer hidden_states when PD + MTP
         self.output_topk_p = None
