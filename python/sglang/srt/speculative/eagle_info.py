@@ -211,6 +211,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         tokens. I.e., logits_output.next_token_logits only contains
         accepted token logits.
         """
+        opd_evict_mask = None
+        opd_logprobs_val = None
         if batch.forward_mode.is_idle():
             return EagleVerifyOutput(
                 draft_input=EagleDraftInput.create_idle_input(
@@ -327,6 +329,9 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
             target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
             
             if speculative_opd:
+                raw_target_probs = F.softmax(
+                    logits_output.next_token_logits, dim=-1
+                ).reshape(bs, self.draft_token_num, -1)  # (bs, draft_token_num, vocab_size)
                 device = batch.device
                 bs = candidates.size(0)
                 spec_steps = self.spec_steps
@@ -335,8 +340,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
 
                 draft_token_probs = self.draft_token_probs.view(bs, spec_steps, -1)
 
-                cand_idx = candidates[:, 1:spec_steps + 1].to(torch.long)  # gather index必须long
-                target_token_probs = target_probs[:, :spec_steps, :].gather(
+                cand_idx = candidates[:, 1:spec_steps + 1].to(torch.long)
+                target_token_probs = raw_target_probs[:, :spec_steps, :].gather(
                     dim=-1, index=cand_idx.unsqueeze(-1)
                 )  # [bs, spec_steps, 1]
 
@@ -364,12 +369,15 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     dtype=torch.int32,
                     device=device,
                 )
+                
+                ri.unsqueeze_(-1) # [bs,1]
                 temp_predict[:, :spec_steps] = candidates[:, 1:spec_steps + 1].to(torch.int32)
-                temp_predict.scatter_(dim=1, index=ri.view(bs, 1), src=corrected_token)
+                temp_predict.scatter_(dim=1, index=ri, src=corrected_token)
 
                 step_indices = torch.arange(draft_token_num, device=device, dtype=torch.long).unsqueeze(0)  # [1, draft_token_num]
-                ri2 = ri.unsqueeze(1)  # [bs,1]
-                valid_pos_mask = (step_indices <= ri2) & (step_indices < spec_steps)  # [bs, draft_token_num]
+                valid_pos_mask = (step_indices <= ri) & (step_indices < spec_steps)  # [bs, draft_token_num]
+                opd_evict_mask = ~((step_indices < ri) & (step_indices < spec_steps)) & (reject_indices.view(bs, 1) < spec_steps)  # [bs, draft_token_num]
+                opd_evict_mask = opd_evict_mask[:, :spec_steps]
 
                 temp_predict.masked_fill_(~valid_pos_mask, pad_value)
 
@@ -431,15 +439,28 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         accept_index_cpu = accept_index.tolist()
         predict_cpu = predict.tolist()
         has_finished = False
+        # opd related
+        draft_token_logprobs_cpu = None
+        evict_mask_cpu = None
 
         # Iterate every accepted token and check if req has finished after append the token
         # should be checked BEFORE free kv cache slots
+        if opd_evict_mask is not None:
+            evict_mask_cpu = opd_evict_mask.to(int).tolist()
+        if self.draft_token_probs is not None:
+            draft_token_logprobs_cpu = self.draft_token_probs.log().tolist()
         for i, (req, accept_index_row) in enumerate(zip(batch.reqs, accept_index_cpu)):
             for j, idx in enumerate(accept_index_row):
                 if idx == -1:
                     break
                 id = predict_cpu[idx]
                 req.output_ids.append(id)
+                if evict_mask_cpu is not None:
+                    mask = evict_mask_cpu[i][idx%self.draft_token_num]
+                    req.opd_evict_mask.append(mask)
+                if draft_token_logprobs_cpu is not None and req.return_logprob:
+                    prob = draft_token_logprobs_cpu[i][idx%self.draft_token_num]
+                    req.output_token_logprobs_val.append(prob)
                 req.check_finished()
                 if req.finished():
                     has_finished = True
@@ -578,6 +599,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 verified_id=verified_id,
                 accept_length_per_req_cpu=draft_input.accept_length_cpu,
                 accepted_indices=accept_index,
+                opd_evict_mask=opd_evict_mask,
+                opd_logprobs_val=opd_logprobs_val,
             )
         else:
             if page_size == 1 or self.topk == 1:
@@ -651,6 +674,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 verified_id=verified_id,
                 accept_length_per_req_cpu=accept_length_list,
                 accepted_indices=accept_index,
+                opd_evict_mask=opd_evict_mask,
+                opd_logprobs_val=opd_logprobs_val,
             )
 
 
@@ -864,3 +889,6 @@ class EagleVerifyOutput:
     accept_length_per_req_cpu: List[int]
     # Accepted indices from logits_output.next_token_logits
     accepted_indices: torch.Tensor
+    # opd related
+    opd_evict_mask: Optional[torch.Tensor] = None
+    opd_logprobs_val: Optional[torch.Tensor] = None
