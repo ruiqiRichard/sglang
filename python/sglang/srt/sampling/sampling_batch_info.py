@@ -65,10 +65,6 @@ class SamplingBatchInfo:
 
     # Handle logit bias
     logit_bias: Optional[torch.Tensor] = None
-    
-    # opd related
-    opd_peak_thresholds: torch.Tensor = None
-    opd_peak_heights: torch.Tensor = None
 
     @classmethod
     def from_schedule_batch(cls, batch: ScheduleBatch, vocab_size: int):
@@ -100,16 +96,6 @@ class SamplingBatchInfo:
             if enable_deterministic
             else None
         )
-        opd_peak_thresholds = torch.tensor(
-            [r.sampling_params.opd_peak_threshold for r in reqs],
-            dtype=torch.float,
-            device=device,
-        )
-        opd_peak_heights = torch.tensor(
-            [r.sampling_params.opd_peak_height for r in reqs],
-            dtype=torch.float,
-            device=device,
-        )
 
         logit_bias = None
         if any(r.sampling_params.logit_bias is not None for r in reqs):
@@ -124,6 +110,10 @@ class SamplingBatchInfo:
             global_server_args.enable_custom_logit_processor
             and any(r.custom_logit_processor for r in reqs)  # check the flag first.
         )  # then check the requests.
+
+        # Keep custom params regardless of whether custom logit processor is enabled.
+        # Some features (e.g. speculative OPD) consume values from custom_params directly.
+        custom_params = [r.sampling_params.custom_params for r in reqs]
 
         if has_custom_logit_processor:
             # Merge the same type of custom logit processors together
@@ -147,10 +137,8 @@ class SamplingBatchInfo:
                 )
                 for processor_str, true_indices in processor_dict.items()
             }
-            custom_params = [r.sampling_params.custom_params for r in reqs]
         else:
             merged_custom_logit_processor = None
-            custom_params = None
 
         # Each penalizers will do nothing if they evaluate themselves as not required by looking at
         # the sampling_params of the requests (See {_is_required()} of each penalizers). So this
@@ -186,8 +174,6 @@ class SamplingBatchInfo:
             custom_logit_processor=merged_custom_logit_processor,
             device=device,
             logit_bias=logit_bias,
-            opd_peak_thresholds=opd_peak_thresholds,
-            opd_peak_heights=opd_peak_heights,
         )
         return ret
 
@@ -259,12 +245,12 @@ class SamplingBatchInfo:
             "top_ks",
             "min_ps",
             "sampling_seed",
-            "opd_peak_thresholds",
-            "opd_peak_heights",
         ]:
             value = getattr(self, item, None)
             if value is not None:
                 setattr(self, item, value[keep_indices_device])
+        if self.custom_params is not None:
+            self.custom_params = [self.custom_params[i] for i in keep_indices]
 
         if self.logit_bias is not None:
             self.logit_bias = self.logit_bias[keep_indices_device]
@@ -280,13 +266,10 @@ class SamplingBatchInfo:
                 mask[keep_indices_device]
             )  # ignore the custom logit processor whose mask is all False
         }
-        self.custom_params = [self.custom_params[i] for i in keep_indices]
-
         # If the custom logit processor is an empty dict, set the flag to False,
-        # and set the custom logit processor and custom params to None.
+        # and set the custom logit processor to None.
         if len(self.custom_logit_processor) == 0:
             self.custom_logit_processor = None
-            self.custom_params = None
             self.has_custom_logit_processor = False
 
     @staticmethod
@@ -344,13 +327,13 @@ class SamplingBatchInfo:
                     self.device,
                 )
             )
-            # Merge the custom params lists
+            # Set the flag to True if any of the two has custom logit processor
+            self.has_custom_logit_processor = True
+
+        if self.custom_params is not None or other.custom_params is not None:
             self.custom_params = self.custom_params or [None] * len(self)
             other.custom_params = other.custom_params or [None] * len(other)
             self.custom_params.extend(other.custom_params)
-
-            # Set the flag to True if any of the two has custom logit processor
-            self.has_custom_logit_processor = True
 
         # Merge logit bias - note this has to come before the temperatures tensor update! Otherwise will cause crashes.
         # See note below on len(self) and len(other).
@@ -367,8 +350,6 @@ class SamplingBatchInfo:
             "top_ks",
             "min_ps",
             "sampling_seed",
-            "opd_peak_thresholds",
-            "opd_peak_heights",
         ]:
             self_val = getattr(self, item, None)
             other_val = getattr(other, item, None)

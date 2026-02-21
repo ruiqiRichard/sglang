@@ -343,11 +343,29 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     dim=-1, index=cand_idx.unsqueeze(-1)
                 )  # [bs, spec_steps, 1]
 
+                if sampling_info.custom_params is None:
+                    opd_peak_thresholds = torch.zeros((bs, 1), device=device)
+                    opd_peak_heights = torch.full((bs, 1), 1.1, device=device)
+                else:
+                    opd_peak_thresholds = torch.tensor(
+                        [
+                            (params or {}).get("opd_peak_threshold", 0.0)
+                            for params in sampling_info.custom_params
+                        ],
+                        device=device,
+                    ).view(bs, 1)
+                    opd_peak_heights = torch.tensor(
+                        [
+                            (params or {}).get("opd_peak_height", 1.1)
+                            for params in sampling_info.custom_params
+                        ],
+                        device=device,
+                    ).view(bs, 1)
                 reject_indices = peak_kl_rejection(
                     draft_probs=draft_token_probs,
                     target_probs=target_token_probs,
-                    thresholds=sampling_info.opd_peak_thresholds.view(bs, 1),
-                    heights=sampling_info.opd_peak_heights.view(bs, 1),
+                    thresholds=opd_peak_thresholds,
+                    heights=opd_peak_heights,
                 ).view(bs)  # [bs]
 
                 accept_length = reject_indices.to(torch.int32).clamp(max=spec_steps - 1)  # [bs]
