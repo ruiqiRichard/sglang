@@ -198,8 +198,6 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         vocab_mask: Optional[torch.Tensor] = None,  # For grammar
         speculative_opd: bool = False,
         teacher_greedy: bool = False,
-        speculative_opd_peak_threshold: float = 0.0,
-        speculative_opd_peak_height: float = 0.0,
     ) -> torch.Tensor:
         """
         Verify and find accepted tokens based on logits output and batch
@@ -348,8 +346,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 reject_indices = peak_kl_rejection(
                     draft_probs=draft_token_probs,
                     target_probs=target_token_probs,
-                    threshold=speculative_opd_peak_threshold,
-                    height=speculative_opd_peak_height,
+                    thresholds=sampling_info.opd_peak_thresholds.view(bs, 1),
+                    heights=sampling_info.opd_peak_heights.view(bs, 1),
                 ).view(bs)  # [bs]
 
                 accept_length = reject_indices.to(torch.int32).clamp(max=spec_steps - 1)  # [bs]

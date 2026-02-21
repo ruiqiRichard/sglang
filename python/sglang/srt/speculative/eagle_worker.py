@@ -726,8 +726,6 @@ class EAGLEWorker(TpModelWorker):
             vocab_mask,
             speculative_opd=self.server_args.speculative_algorithm == "STANDALONE_OPD",
             teacher_greedy=self.server_args.speculative_opd_teacher_greedy,
-            speculative_opd_peak_threshold=self.server_args.speculative_opd_peak_threshold,
-            speculative_opd_peak_height=self.server_args.speculative_opd_peak_height,
         )
 
         # Post process based on verified outputs.

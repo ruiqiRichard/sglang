@@ -65,6 +65,10 @@ class SamplingBatchInfo:
 
     # Handle logit bias
     logit_bias: Optional[torch.Tensor] = None
+    
+    # opd related
+    opd_peak_thresholds: torch.Tensor = None
+    opd_peak_heights: torch.Tensor = None
 
     @classmethod
     def from_schedule_batch(cls, batch: ScheduleBatch, vocab_size: int):
@@ -95,6 +99,16 @@ class SamplingBatchInfo:
             )
             if enable_deterministic
             else None
+        )
+        opd_peak_thresholds = torch.tensor(
+            [r.sampling_params.opd_peak_threshold for r in reqs],
+            dtype=torch.float,
+            device=device,
+        )
+        opd_peak_heights = torch.tensor(
+            [r.sampling_params.opd_peak_height for r in reqs],
+            dtype=torch.float,
+            device=device,
         )
 
         logit_bias = None
@@ -172,6 +186,8 @@ class SamplingBatchInfo:
             custom_logit_processor=merged_custom_logit_processor,
             device=device,
             logit_bias=logit_bias,
+            opd_peak_thresholds=opd_peak_thresholds,
+            opd_peak_heights=opd_peak_heights,
         )
         return ret
 

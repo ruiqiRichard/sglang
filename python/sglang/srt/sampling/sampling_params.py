@@ -59,6 +59,8 @@ class SamplingParams:
         stream_interval: Optional[int] = None,
         logit_bias: Optional[Dict[str, float]] = None,
         sampling_seed: int = 42,
+        opd_peak_threshold: float = 0.0,
+        opd_peak_height: float = 1.1,
     ) -> None:
         self.max_new_tokens = max_new_tokens
         self.stop_strs = stop
@@ -88,6 +90,8 @@ class SamplingParams:
         self.stream_interval = stream_interval
         self.logit_bias = logit_bias
         self.sampling_seed = sampling_seed
+        self.opd_peak_threshold = opd_peak_threshold
+        self.opd_peak_height = opd_peak_height
 
         # Process some special cases
         if 0 <= self.temperature < _SAMPLING_EPS:

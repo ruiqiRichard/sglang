@@ -387,8 +387,6 @@ class ServerArgs:
     speculative_attention_mode: str = "prefill"
     speculative_moe_runner_backend: Optional[str] = None
     speculative_opd_teacher_greedy: bool = False
-    speculative_opd_peak_height: float = 0.8
-    speculative_opd_peak_threshold: float = 0.5
     # For ngram only
     speculative_ngram_min_match_window_size: int = 1
     speculative_ngram_max_match_window_size: int = 12
@@ -2746,18 +2744,6 @@ class ServerArgs:
             action="store_true",
             help="If set, the target model in OPD always generates the greedy token for verifying draft tokens.",
             default=ServerArgs.speculative_opd_teacher_greedy,
-        )
-        parser.add_argument(
-            "--speculative-opd-peak-threshold",
-            type=float,
-            help="The peak threshold for OPD. Draft tokens whose kl value differs from neighbours by more than this threshold will be rejected.",
-            default=ServerArgs.speculative_opd_peak_threshold,
-        )
-        parser.add_argument(
-            "--speculative-opd-peak-height",
-            type=float,
-            help="The peak height for OPD. Draft tokens whose kl value is higher than this height will be rejected.",
-            default=ServerArgs.speculative_opd_peak_height,
         )
         parser.add_argument(
             "--speculative-accept-threshold-acc",
