@@ -259,6 +259,8 @@ class SamplingBatchInfo:
             "top_ks",
             "min_ps",
             "sampling_seed",
+            "opd_peak_thresholds",
+            "opd_peak_heights",
         ]:
             value = getattr(self, item, None)
             if value is not None:
@@ -365,6 +367,8 @@ class SamplingBatchInfo:
             "top_ks",
             "min_ps",
             "sampling_seed",
+            "opd_peak_thresholds",
+            "opd_peak_heights",
         ]:
             self_val = getattr(self, item, None)
             other_val = getattr(other, item, None)
