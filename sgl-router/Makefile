@@ -1,4 +1,4 @@
-# Model Gateway Makefile
+# SGLang Router Makefile
 # Provides convenient shortcuts for common development tasks
 
 # Check if sccache is available and set RUSTC_WRAPPER accordingly
@@ -13,14 +13,14 @@ endif
 .PHONY: help bench bench-quick bench-baseline bench-compare test build clean
 
 help: ## Show this help message
-	@echo "Model Gateway Development Commands"
+	@echo "SGLang Router Development Commands"
 	@echo "=================================="
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 
 build: ## Build the project in release mode
-	@echo "Building SGLang Model Gateway..."
+	@echo "Building SGLang Router..."
 	@cargo build --release
 
 test: ## Run all tests
@@ -59,11 +59,11 @@ check: ## Run cargo check and clippy
 	@echo "Running cargo check..."
 	@cargo check
 	@echo "Running clippy..."
-	@cargo clippy --all-targets --all-features -- -D warnings
+	@cargo clippy
 
 fmt: ## Format code with rustfmt
 	@echo "Formatting code..."
-	@rustup run nightly cargo fmt
+	@cargo fmt
 
 # Development workflow shortcuts
 dev-setup: build test ## Set up development environment

@@ -9,10 +9,9 @@ use super::{
     RouterTrait,
 };
 use crate::{
-    app_context::AppContext,
-    config::{PolicyConfig, RoutingMode},
-    core::ConnectionMode,
+    config::{ConnectionMode, PolicyConfig, RoutingMode},
     policies::PolicyFactory,
+    server::AppContext,
 };
 
 /// Factory for creating router instances based on configuration
@@ -22,7 +21,7 @@ impl RouterFactory {
     /// Create a router instance from application context
     pub async fn create_router(ctx: &Arc<AppContext>) -> Result<Box<dyn RouterTrait>, String> {
         match ctx.router_config.connection_mode {
-            ConnectionMode::Grpc { .. } => match &ctx.router_config.mode {
+            ConnectionMode::Grpc => match &ctx.router_config.mode {
                 RoutingMode::Regular { .. } => Self::create_grpc_router(ctx).await,
                 RoutingMode::PrefillDecode {
                     prefill_policy,
@@ -56,7 +55,7 @@ impl RouterFactory {
                     )
                     .await
                 }
-                RoutingMode::OpenAI { worker_urls } => {
+                RoutingMode::OpenAI { worker_urls, .. } => {
                     Self::create_openai_router(worker_urls.clone(), ctx).await
                 }
             },
@@ -123,11 +122,19 @@ impl RouterFactory {
         worker_urls: Vec<String>,
         ctx: &Arc<AppContext>,
     ) -> Result<Box<dyn RouterTrait>, String> {
-        if worker_urls.is_empty() {
-            return Err("OpenAI mode requires at least one worker URL".to_string());
-        }
+        let base_url = worker_urls
+            .first()
+            .cloned()
+            .ok_or_else(|| "OpenAI mode requires at least one worker URL".to_string())?;
 
-        let router = OpenAIRouter::new(worker_urls, ctx).await?;
+        let router = OpenAIRouter::new(
+            base_url,
+            Some(ctx.router_config.circuit_breaker.clone()),
+            ctx.response_storage.clone(),
+            ctx.conversation_storage.clone(),
+            ctx.conversation_item_storage.clone(),
+        )
+        .await?;
 
         Ok(Box::new(router))
     }

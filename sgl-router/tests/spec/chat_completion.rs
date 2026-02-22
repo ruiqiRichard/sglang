@@ -349,7 +349,8 @@ fn test_tool_choice_allowed_tools_invalid_mode() {
         }]),
         tool_choice: Some(ToolChoice::AllowedTools {
             mode: "invalid_mode".to_string(),
-            tools: vec![ToolReference::Function {
+            tools: vec![ToolReference {
+                tool_type: "function".to_string(),
                 name: "get_weather".to_string(),
             }],
             tool_type: "function".to_string(),
@@ -386,7 +387,8 @@ fn test_tool_choice_allowed_tools_valid_mode_auto() {
         }]),
         tool_choice: Some(ToolChoice::AllowedTools {
             mode: "auto".to_string(),
-            tools: vec![ToolReference::Function {
+            tools: vec![ToolReference {
+                tool_type: "function".to_string(),
                 name: "get_weather".to_string(),
             }],
             tool_type: "function".to_string(),
@@ -417,7 +419,8 @@ fn test_tool_choice_allowed_tools_valid_mode_required() {
         }]),
         tool_choice: Some(ToolChoice::AllowedTools {
             mode: "required".to_string(),
-            tools: vec![ToolReference::Function {
+            tools: vec![ToolReference {
+                tool_type: "function".to_string(),
                 name: "get_weather".to_string(),
             }],
             tool_type: "function".to_string(),
@@ -448,7 +451,8 @@ fn test_tool_choice_allowed_tools_tool_not_found() {
         }]),
         tool_choice: Some(ToolChoice::AllowedTools {
             mode: "auto".to_string(),
-            tools: vec![ToolReference::Function {
+            tools: vec![ToolReference {
+                tool_type: "function".to_string(),
                 name: "nonexistent_tool".to_string(),
             }],
             tool_type: "function".to_string(),
@@ -497,10 +501,12 @@ fn test_tool_choice_allowed_tools_multiple_tools_valid() {
         tool_choice: Some(ToolChoice::AllowedTools {
             mode: "auto".to_string(),
             tools: vec![
-                ToolReference::Function {
+                ToolReference {
+                    tool_type: "function".to_string(),
                     name: "get_weather".to_string(),
                 },
-                ToolReference::Function {
+                ToolReference {
+                    tool_type: "function".to_string(),
                     name: "get_time".to_string(),
                 },
             ],
@@ -544,10 +550,12 @@ fn test_tool_choice_allowed_tools_one_invalid_among_valid() {
         tool_choice: Some(ToolChoice::AllowedTools {
             mode: "auto".to_string(),
             tools: vec![
-                ToolReference::Function {
+                ToolReference {
+                    tool_type: "function".to_string(),
                     name: "get_weather".to_string(),
                 },
-                ToolReference::Function {
+                ToolReference {
+                    tool_type: "function".to_string(),
                     name: "nonexistent_tool".to_string(),
                 },
             ],

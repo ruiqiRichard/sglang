@@ -8,10 +8,7 @@ use super::{
     common::*,
     sampling_params::{validate_top_k_value, validate_top_p_value},
 };
-use crate::protocols::{
-    builders::{ChatCompletionResponseBuilder, ChatCompletionStreamResponseBuilder},
-    validated::Normalizable,
-};
+use crate::protocols::validated::Normalizable;
 
 // ============================================================================
 // Chat Messages
@@ -460,43 +457,21 @@ fn validate_chat_cross_parameters(
                         return Err(e);
                     }
 
-                    // Validate that all ToolReferences are Function type (Chat API only supports function tools)
+                    // Validate that all referenced tool names exist in tools
                     for tool_ref in allowed_tools {
-                        match tool_ref {
-                            ToolReference::Function { name } => {
-                                // Validate that the function exists in tools array
-                                let tool_exists = tools.iter().any(|tool| {
-                                    tool.tool_type == "function" && tool.function.name == *name
-                                });
+                        let tool_exists = tools.iter().any(|tool| {
+                            tool.tool_type == tool_ref.tool_type
+                                && tool.function.name == tool_ref.name
+                        });
 
-                                if !tool_exists {
-                                    let mut e = validator::ValidationError::new(
-                                        "tool_choice_tool_not_found",
-                                    );
-                                    e.message = Some(
-                                        format!(
-                                            "Invalid value for 'tool_choice.tools': tool '{}' not found in 'tools'.",
-                                            name
-                                        )
-                                        .into(),
-                                    );
-                                    return Err(e);
-                                }
-                            }
-                            _ => {
-                                // Chat Completion API only supports function tools in tool_choice
-                                let mut e = validator::ValidationError::new(
-                                    "tool_choice_invalid_tool_type",
-                                );
-                                e.message = Some(
-                                    format!(
-                                        "Invalid value for 'tool_choice.tools': Chat Completion API only supports function tools, got '{}'.",
-                                        tool_ref.identifier()
-                                    )
-                                    .into(),
-                                );
-                                return Err(e);
-                            }
+                        if !tool_exists {
+                            let mut e =
+                                validator::ValidationError::new("tool_choice_tool_not_found");
+                            e.message = Some(format!(
+                                "Invalid value for 'tool_choice.tools': tool '{}' not found in 'tools'.",
+                                tool_ref.name
+                            ).into());
+                            return Err(e);
                         }
                     }
                 }
@@ -642,16 +617,6 @@ pub struct ChatCompletionResponse {
     pub system_fingerprint: Option<String>,
 }
 
-impl ChatCompletionResponse {
-    /// Create a new builder for ChatCompletionResponse
-    pub fn builder(
-        id: impl Into<String>,
-        model: impl Into<String>,
-    ) -> ChatCompletionResponseBuilder {
-        ChatCompletionResponseBuilder::new(id, model)
-    }
-}
-
 /// Response message structure for ChatCompletionResponse (different from request ChatMessage)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatCompletionMessage {
@@ -660,6 +625,8 @@ pub struct ChatCompletionMessage {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Reasoning content for O1-style models (SGLang extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     // Note: function_call is deprecated and not included
     // Note: refusal, annotations, audio are not added yet
@@ -693,16 +660,6 @@ pub struct ChatCompletionStreamResponse {
     pub usage: Option<Usage>,
 }
 
-impl ChatCompletionStreamResponse {
-    /// Create a new builder for ChatCompletionStreamResponse
-    pub fn builder(
-        id: impl Into<String>,
-        model: impl Into<String>,
-    ) -> ChatCompletionStreamResponseBuilder {
-        ChatCompletionStreamResponseBuilder::new(id, model)
-    }
-}
-
 /// Delta structure for streaming chat completion responses
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessageDelta {
@@ -712,6 +669,8 @@ pub struct ChatMessageDelta {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallDelta>>,
+    /// Reasoning content delta for O1-style models (SGLang extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }
 
@@ -719,6 +678,7 @@ pub struct ChatMessageDelta {
 pub struct ChatStreamChoice {
     pub index: u32,
     pub delta: ChatMessageDelta,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<ChatLogProbs>,
     pub finish_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

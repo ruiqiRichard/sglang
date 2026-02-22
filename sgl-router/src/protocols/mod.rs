@@ -1,7 +1,6 @@
 // Protocol definitions and validation for various LLM APIs
 // This module provides a structured approach to handling different API protocols
 
-pub mod builders;
 pub mod chat;
 pub mod classify;
 pub mod common;

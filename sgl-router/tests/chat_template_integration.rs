@@ -171,7 +171,7 @@ fn test_chatml_template() {
 
     let processor = ChatTemplateProcessor::new(template.to_string());
 
-    let messages = [
+    let messages = vec![
         ChatMessage::User {
             content: UserMessageContent::Text("Hello".to_string()),
             name: None,

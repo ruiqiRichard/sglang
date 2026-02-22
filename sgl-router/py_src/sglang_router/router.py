@@ -1,13 +1,8 @@
 from typing import Optional
 
 from sglang_router.router_args import RouterArgs
-from sglang_router.sglang_router_rs import (
-    BackendType,
-    HistoryBackendType,
-    PolicyType,
-    PyOracleConfig,
-)
-from sglang_router.sglang_router_rs import Router as _Router
+from sglang_router_rs import BackendType, HistoryBackendType, PolicyType, PyOracleConfig
+from sglang_router_rs import Router as _Router
 
 
 def policy_from_str(policy_str: Optional[str]) -> PolicyType:
@@ -19,7 +14,6 @@ def policy_from_str(policy_str: Optional[str]) -> PolicyType:
         "round_robin": PolicyType.RoundRobin,
         "cache_aware": PolicyType.CacheAware,
         "power_of_two": PolicyType.PowerOfTwo,
-        "bucket": PolicyType.Bucket,
     }
     return policy_map[policy_str]
 

@@ -18,13 +18,18 @@ use minijinja::{
 use serde_json;
 
 /// Chat template content format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatTemplateContentFormat {
     /// Content is a simple string
-    #[default]
     String,
     /// Content is a list of structured parts (OpenAI format)
     OpenAI,
+}
+
+impl Default for ChatTemplateContentFormat {
+    fn default() -> Self {
+        Self::String
+    }
 }
 
 impl std::fmt::Display for ChatTemplateContentFormat {

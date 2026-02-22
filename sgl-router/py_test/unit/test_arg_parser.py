@@ -5,7 +5,9 @@ These tests focus on testing the argument parsing logic in isolation,
 without starting actual router instances.
 """
 
+import argparse
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sglang_router.launch_router import RouterArgs, parse_router_args
@@ -406,7 +408,7 @@ class TestPolicyFromStr:
 
     def test_valid_policies(self):
         """Test conversion of valid policy strings."""
-        from sglang_router.sglang_router_rs import PolicyType
+        from sglang_router_rs import PolicyType
 
         assert policy_from_str("random") == PolicyType.Random
         assert policy_from_str("round_robin") == PolicyType.RoundRobin
