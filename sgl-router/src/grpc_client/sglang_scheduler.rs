@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use prost_types::{ListValue as ProstListValue, Struct as ProstStruct, Value as ProstValue};
+use serde_json::Value as JsonValue;
 use tonic::{transport::Channel, Request, Streaming};
 use tracing::{debug, warn};
 
@@ -350,6 +352,48 @@ impl SglangSchedulerClient {
         }
     }
 
+    fn json_object_to_prost_struct(
+        value: Option<&std::collections::HashMap<String, JsonValue>>,
+    ) -> Result<Option<ProstStruct>, String> {
+        value
+            .map(|map| {
+                let mut fields = std::collections::BTreeMap::new();
+                for (key, json_value) in map {
+                    fields.insert(key.clone(), Self::json_value_to_prost_value(json_value)?);
+                }
+                Ok(ProstStruct {
+                    fields: fields.into_iter().collect(),
+                })
+            })
+            .transpose()
+    }
+
+    fn json_value_to_prost_value(value: &JsonValue) -> Result<ProstValue, String> {
+        let kind = match value {
+            JsonValue::Null => prost_types::value::Kind::NullValue(0),
+            JsonValue::Bool(v) => prost_types::value::Kind::BoolValue(*v),
+            JsonValue::Number(v) => prost_types::value::Kind::NumberValue(
+                v.as_f64()
+                    .ok_or_else(|| "custom_params contains a non-finite number".to_string())?,
+            ),
+            JsonValue::String(v) => prost_types::value::Kind::StringValue(v.clone()),
+            JsonValue::Array(values) => prost_types::value::Kind::ListValue(ProstListValue {
+                values: values
+                    .iter()
+                    .map(Self::json_value_to_prost_value)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }),
+            JsonValue::Object(map) => prost_types::value::Kind::StructValue(ProstStruct {
+                fields: map
+                    .iter()
+                    .map(|(k, v)| Ok((k.clone(), Self::json_value_to_prost_value(v)?)))
+                    .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?,
+            }),
+        };
+
+        Ok(ProstValue { kind: Some(kind) })
+    }
+
     /// Build constraint for structured generation
     fn build_constraint(
         &self,
@@ -496,6 +540,7 @@ impl SglangSchedulerClient {
 
         // Handle constraints (exactly one allowed)
         sampling.constraint = Self::build_single_constraint_from_plain(p)?;
+        sampling.custom_params = Self::json_object_to_prost_struct(p.custom_params.as_ref())?;
 
         Ok(sampling)
     }

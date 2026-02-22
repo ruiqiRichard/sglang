@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use validator::Validate;
 
 use super::common::StringOrArray;
@@ -58,6 +61,8 @@ pub struct SamplingParams {
     pub n: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling_seed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_params: Option<HashMap<String, Value>>,
 }
 
 // ============================================================================
