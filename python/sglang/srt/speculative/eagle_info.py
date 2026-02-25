@@ -853,6 +853,14 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
                 logger.warning(
                     f"length of new_indices: {len(new_indices)} != length of topk_p: {len(self.topk_p)}, this should not happen"
                 )
+                # Fall back to explicit indexing if scheduler passes original-batch indices
+                # (e.g. preemption) but marks this as already filtered.
+                if len(new_indices) > 0 and int(new_indices.max().item()) < len(self.topk_p):
+                    self.topk_p = self.topk_p[new_indices]
+                    self.topk_index = self.topk_index[new_indices]
+                    self.hidden_states = self.hidden_states[new_indices]
+                    self.verified_id = self.verified_id[new_indices]
+                    return
             self.topk_p = self.topk_p[: len(new_indices)]
             self.topk_index = self.topk_index[: len(new_indices)]
             self.hidden_states = self.hidden_states[: len(new_indices)]
