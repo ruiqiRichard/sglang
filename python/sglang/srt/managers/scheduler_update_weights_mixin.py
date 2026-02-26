@@ -39,6 +39,72 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerUpdateWeightsMixin:
+    def _merge_release_memory_occupation_req(
+        self: Scheduler,
+        recv_req: ReleaseMemoryOccupationReqInput,
+    ):
+        pending_req = self.pending_release_memory_occupation_req
+        if pending_req is None:
+            self.pending_release_memory_occupation_req = recv_req
+            return
+
+        # None/[] means "all tags", which dominates any narrower request.
+        if not pending_req.tags or not recv_req.tags:
+            pending_req.tags = None
+            return
+
+        merged = []
+        seen = set()
+        for tag in [*pending_req.tags, *recv_req.tags]:
+            if tag not in seen:
+                seen.add(tag)
+                merged.append(tag)
+        pending_req.tags = merged
+
+    def _release_memory_occupation_impl(
+        self: Scheduler, recv_req: ReleaseMemoryOccupationReqInput
+    ):
+        assert (
+            self._is_no_request()
+        ), "release_memory_occupation should be called only when no ongoing request."
+
+        tags = recv_req.tags
+
+        if tags is None or len(tags) == 0:
+            tags = GPU_MEMORY_ALL_TYPES
+
+        for tag in tags:
+            self.offload_tags.add(tag)
+
+        if GPU_MEMORY_TYPE_KV_CACHE in tags:
+            self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_KV_CACHE)
+            self.flush_cache()
+
+        if GPU_MEMORY_TYPE_WEIGHTS in tags:
+            self.stashed_model_static_state = _export_static_state(
+                self.tp_worker.model_runner.model
+            )
+            torch.distributed.barrier(self.tp_cpu_group)
+            self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS)
+
+        if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
+            self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
+
+        torch.cuda.synchronize()
+
+        return ReleaseMemoryOccupationReqOutput()
+
+    def try_complete_pending_release_memory_occupation(self: Scheduler):
+        pending_req = self.pending_release_memory_occupation_req
+        if pending_req is None or not self._is_no_request():
+            return
+
+        logger.info("Scheduler became idle; proceeding with deferred release_memory_occupation")
+        self.pending_release_memory_occupation_req = None
+        output = self._release_memory_occupation_impl(pending_req)
+        self.offload_transitioning = False
+        if self.recv_from_rpc is not None:
+            self.recv_from_rpc.send_pyobj(output)
 
     def update_weights_from_disk(self, recv_req: UpdateWeightFromDiskReqInput):
         """In-place update of the weights from disk."""
@@ -107,39 +173,30 @@ class SchedulerUpdateWeightsMixin:
     def release_memory_occupation(
         self: Scheduler, recv_req: ReleaseMemoryOccupationReqInput
     ):
-        assert (
-            self._is_no_request()
-        ), "release_memory_occupation should be called only when no ongoing request."
-
-        tags = recv_req.tags
-
-        if tags is None or len(tags) == 0:
-            tags = GPU_MEMORY_ALL_TYPES
-
-        for tag in tags:
-            self.offload_tags.add(tag)
-
-        if GPU_MEMORY_TYPE_KV_CACHE in tags:
-            self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_KV_CACHE)
-            self.flush_cache()
-
-        if GPU_MEMORY_TYPE_WEIGHTS in tags:
-            self.stashed_model_static_state = _export_static_state(
-                self.tp_worker.model_runner.model
+        self.offload_transitioning = True
+        if not self._is_no_request():
+            logger.info(
+                "Deferring release_memory_occupation until scheduler is idle "
+                "(waiting=%d, running_empty=%s, last_empty=%s, cur_empty=%s)",
+                len(self.waiting_queue),
+                self.running_batch.is_empty(),
+                self.last_batch is None or self.last_batch.is_empty(),
+                self.cur_batch is None or self.cur_batch.is_empty(),
             )
-            torch.distributed.barrier(self.tp_cpu_group)
-            self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS)
+            self._merge_release_memory_occupation_req(recv_req)
+            return None
 
-        if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
-            self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
-
-        torch.cuda.synchronize()
-
-        return ReleaseMemoryOccupationReqOutput()
+        try:
+            return self._release_memory_occupation_impl(recv_req)
+        finally:
+            self.offload_transitioning = False
 
     def resume_memory_occupation(
         self: Scheduler, recv_req: ResumeMemoryOccupationReqInput
     ):
+        assert (
+            self.pending_release_memory_occupation_req is None
+        ), "resume_memory_occupation should not be called while release is pending."
         tags = recv_req.tags
 
         if tags is None or len(tags) == 0:

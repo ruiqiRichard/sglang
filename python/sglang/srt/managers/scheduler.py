@@ -436,6 +436,11 @@ class Scheduler(
         self.num_generated_tokens = 0
         self.last_prefill_tokens = 0
         self.return_health_check_ct = 0
+        # A transient gate used to block health-check generate requests while
+        # transitioning into memory offload (before offload_tags is populated).
+        self.offload_transitioning = False
+        # Defer release_memory_occupation until the scheduler becomes fully idle.
+        self.pending_release_memory_occupation_req = None
         self.num_retracted_reqs: int = 0
         self.num_paused_reqs: int = 0
         self.sessions: Dict[str, Session] = {}
@@ -1125,11 +1130,19 @@ class Scheduler(
         return recv_reqs
 
     def process_input_requests(self, recv_reqs: List):
+        self.try_complete_pending_release_memory_occupation()
+
+        if any(isinstance(req, ReleaseMemoryOccupationReqInput) for req in recv_reqs):
+            # Pre-mark the transition so a health check in the same recv batch cannot
+            # slip in before the release request is dispatched.
+            self.offload_transitioning = True
+
         for recv_req in recv_reqs:
             # If it is a health check generation request and there are running requests, ignore it.
             if is_health_check_generate_req(recv_req) and (
                 self.chunked_req is not None
                 or not self.running_batch.is_empty()
+                or self.offload_transitioning
                 or len(self.offload_tags) > 0
             ):
                 self.return_health_check_ct += 1
@@ -1142,6 +1155,8 @@ class Scheduler(
                         self.recv_from_rpc.send_pyobj(output)
                 else:
                     self.send_to_tokenizer.send_output(output, recv_req)
+
+        self.try_complete_pending_release_memory_occupation()
 
     def init_req_max_new_tokens(self, req):
         req.sampling_params.max_new_tokens = min(
