@@ -109,6 +109,12 @@ class EAGLEDraftCudaGraphRunner:
                 (self.max_bs, self.model_runner.model_config.hidden_size),
                 dtype=self.model_runner.dtype,
             )
+            # Runtime sampling params must be copied into graph inputs for OPD mode.
+            self.sampling_temperatures = torch.ones(
+                (self.max_bs, 1), dtype=torch.float32
+            )
+            self.sampling_top_ps = torch.ones((self.max_bs,), dtype=torch.float32)
+            self.sampling_top_ks = torch.ones((self.max_bs,), dtype=torch.int32)
 
             if self.require_gathered_buffer:
                 if self.require_mlp_tp_gather:
@@ -228,9 +234,9 @@ class EAGLEDraftCudaGraphRunner:
         )
         
         sampling_info = SamplingBatchInfo(
-            temperatures=torch.ones((num_seqs, 1), device=self.input_ids.device),
-            top_ps=torch.ones((num_seqs,), device=self.input_ids.device),
-            top_ks=torch.ones((num_seqs,), device=self.input_ids.device),
+            temperatures=self.sampling_temperatures[:num_seqs],
+            top_ps=self.sampling_top_ps[:num_seqs],
+            top_ks=self.sampling_top_ks[:num_seqs],
             min_ps=None,
             is_all_greedy=False,
             need_top_k_sampling=False,
@@ -351,6 +357,16 @@ class EAGLEDraftCudaGraphRunner:
         self.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p)
         self.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index)
         self.hidden_states[:raw_bs].copy_(forward_batch.spec_info.hidden_states)
+        if forward_batch.sampling_info is not None:
+            if bs != raw_bs:
+                self.sampling_temperatures[:bs].fill_(1.0)
+                self.sampling_top_ps[:bs].fill_(1.0)
+                self.sampling_top_ks[:bs].fill_(1)
+            self.sampling_temperatures[:raw_bs].copy_(
+                forward_batch.sampling_info.temperatures
+            )
+            self.sampling_top_ps[:raw_bs].copy_(forward_batch.sampling_info.top_ps)
+            self.sampling_top_ks[:raw_bs].copy_(forward_batch.sampling_info.top_ks)
 
         # TODO(ch-wan): support num_token_non_padded
         if self.require_gathered_buffer:
