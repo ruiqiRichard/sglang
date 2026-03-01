@@ -805,7 +805,7 @@ class EAGLEWorker(TpModelWorker):
         # acceptance indices are the indices in a "flattened" batch.
         # dividing it to num_draft_tokens will yield the actual batch index.
         temperatures = temperatures[accepted_indices // num_draft_tokens]
-        if SGLANG_RETURN_ORIGINAL_LOGPROB or self.server_args.speculative_algorithm == "STANDALONE_OPD":
+        if SGLANG_RETURN_ORIGINAL_LOGPROB:
             logprobs = torch.nn.functional.log_softmax(
                 logits_output.next_token_logits, dim=-1
             )

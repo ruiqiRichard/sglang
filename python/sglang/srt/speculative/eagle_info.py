@@ -311,25 +311,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
             target_probs = F.softmax(
                 logits_output.next_token_logits / expanded_temperature, dim=-1
             )  # (bs * draft_token_num, vocab_size)
-            target_probs = top_k_renorm_prob(
-                target_probs,
-                torch.repeat_interleave(
-                    sampling_info.top_ks, self.draft_token_num, dim=0
-                ),
-            )  # (bs * draft_token_num, vocab_size)
-            if not torch.all(sampling_info.top_ps == 1.0):
-                target_probs = top_p_renorm_prob(
-                    target_probs,
-                    torch.repeat_interleave(
-                        sampling_info.top_ps, self.draft_token_num, dim=0
-                    ),
-                )
-            target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
             
             if speculative_opd:
-                raw_target_probs = F.softmax(
-                    logits_output.next_token_logits, dim=-1
-                ).reshape(bs, self.draft_token_num, -1)  # (bs, draft_token_num, vocab_size)
                 device = batch.device
                 bs = candidates.size(0)
                 spec_steps = self.spec_steps
@@ -339,7 +322,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 draft_token_probs = self.draft_token_probs.view(bs, spec_steps, -1)
 
                 cand_idx = candidates[:, 1:spec_steps + 1].to(torch.long)
-                target_token_probs = raw_target_probs[:, :spec_steps, :].gather(
+                target_probs = target_probs[:, :spec_steps, :].gather(
                     dim=-1, index=cand_idx.unsqueeze(-1)
                 )  # [bs, spec_steps, 1]
 
@@ -363,7 +346,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     ).view(bs, 1)
                 reject_indices = peak_kl_rejection(
                     draft_probs=draft_token_probs,
-                    target_probs=target_token_probs,
+                    target_probs=target_probs,
                     thresholds=opd_peak_thresholds,
                     heights=opd_peak_heights,
                 ).view(bs)  # [bs]
@@ -411,6 +394,20 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 predict_view[m] = flat_temp[m]
                 
             else:
+                target_probs = top_k_renorm_prob(
+                    target_probs,
+                    torch.repeat_interleave(
+                        sampling_info.top_ks, self.draft_token_num, dim=0
+                    ),
+                )  # (bs * draft_token_num, vocab_size)
+                if not torch.all(sampling_info.top_ps == 1.0):
+                    target_probs = top_p_renorm_prob(
+                        target_probs,
+                        torch.repeat_interleave(
+                            sampling_info.top_ps, self.draft_token_num, dim=0
+                        ),
+                    )
+                target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
                 draft_probs = torch.zeros(
                     target_probs.shape, dtype=torch.float32, device=batch.device
                 )
