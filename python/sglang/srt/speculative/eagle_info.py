@@ -313,6 +313,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
             )  # (bs * draft_token_num, vocab_size)
             
             if speculative_opd:
+                target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
                 device = batch.device
                 bs = candidates.size(0)
                 spec_steps = self.spec_steps
