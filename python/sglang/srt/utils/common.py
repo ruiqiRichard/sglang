@@ -2544,13 +2544,13 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
         temperatures: (batch_size, 1) - Tensor of floats
     """
     # apply temperature
-    probs = F.softmax(
+    raw_probs = F.softmax(
         logits / temperatures, dim=-1
     )
 
     # top-k filtering
     probs = top_k_renorm_prob(
-        probs,
+        raw_probs,
         top_ks,
     )
 
@@ -2562,7 +2562,7 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
 
     # sample
     chosen_indices = torch.multinomial(probs, num_samples=1)
-    chosen_p = torch.gather(probs, -1, chosen_indices)
+    chosen_p = torch.gather(raw_probs, -1, chosen_indices)
 
     return chosen_p, chosen_indices
 

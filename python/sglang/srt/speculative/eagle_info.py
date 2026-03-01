@@ -323,7 +323,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 draft_token_probs = self.draft_token_probs.view(bs, spec_steps, -1)
 
                 cand_idx = candidates[:, 1:spec_steps + 1].to(torch.long)
-                target_probs = target_probs[:, :spec_steps, :].gather(
+                target_token_probs = target_probs[:, :spec_steps, :].gather(
                     dim=-1, index=cand_idx.unsqueeze(-1)
                 )  # [bs, spec_steps, 1]
 
@@ -347,7 +347,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     ).view(bs, 1)
                 reject_indices = peak_kl_rejection(
                     draft_probs=draft_token_probs,
-                    target_probs=target_probs,
+                    target_probs=target_token_probs,
                     thresholds=opd_peak_thresholds,
                     heights=opd_peak_heights,
                 ).view(bs)  # [bs]
