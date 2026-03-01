@@ -345,6 +345,35 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                         ],
                         device=device,
                     ).view(bs, 1)
+
+                # Temperature-adjust OPD rejection params.
+                # Base params are interpreted at tau_ref = 1.0 and mapped to current tau.
+                # Keep values outside [0, 1) unchanged (e.g., height >= 1.0 disables peaks).
+                opd_temperatures = (
+                    sampling_info.temperatures.to(
+                        device=device, dtype=opd_peak_thresholds.dtype
+                    )
+                    .view(bs, -1)[:, :1]
+                    .clamp_min(1e-6)
+                )
+                tau_exp = 1.0 / opd_temperatures
+
+                threshold_in_range = (opd_peak_thresholds >= 0.0) & (opd_peak_thresholds < 1.0)
+                height_in_range = (opd_peak_heights >= 0.0) & (opd_peak_heights < 1.0)
+
+                scaled_thresholds = 1.0 - torch.pow(
+                    1.0 - opd_peak_thresholds.clamp(0.0, 1.0), tau_exp
+                )
+                scaled_heights = 1.0 - torch.pow(
+                    1.0 - opd_peak_heights.clamp(0.0, 1.0), tau_exp
+                )
+
+                opd_peak_thresholds = torch.where(
+                    threshold_in_range, scaled_thresholds, opd_peak_thresholds
+                )
+                opd_peak_heights = torch.where(
+                    height_in_range, scaled_heights, opd_peak_heights
+                )
                 reject_indices = peak_kl_rejection(
                     draft_probs=draft_token_probs,
                     target_probs=target_token_probs,
