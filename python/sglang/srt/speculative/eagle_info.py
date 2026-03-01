@@ -352,31 +352,40 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     heights=opd_peak_heights,
                 ).view(bs)  # [bs]
 
-                accept_length = reject_indices.to(torch.int32).clamp(max=spec_steps - 1)  # [bs]
+                accept_length = reject_indices.to(torch.int32).clamp(
+                    max=spec_steps - 1
+                )  # [bs]
+                has_rejection = reject_indices < spec_steps  # [bs]
 
                 row = torch.arange(bs, device=device)
                 ri = accept_length.to(torch.long)  # [bs]
-                correction_probs = target_probs[row, ri]  # [bs, vocab]
 
-                if teacher_greedy:
-                    corrected_token = correction_probs.argmax(dim=-1, keepdim=True).to(torch.int32)  # [bs,1]
-                else:
-                    corrected_token = torch.multinomial(correction_probs, num_samples=1, replacement=True).to(torch.int32)
-                    
                 temp_predict = torch.full(
                     (bs, draft_token_num),
                     pad_value,
                     dtype=torch.int32,
                     device=device,
                 )
-                
-                ri.unsqueeze_(-1) # [bs,1]
                 temp_predict[:, :spec_steps] = candidates[:, 1:spec_steps + 1].to(torch.int32)
-                temp_predict.scatter_(dim=1, index=ri, src=corrected_token)
+
+                if has_rejection.any():
+                    reject_rows = row[has_rejection]
+                    reject_ri = ri[has_rejection]
+                    correction_probs = target_probs[reject_rows, reject_ri]  # [n_reject, vocab]
+
+                    if teacher_greedy:
+                        corrected_token = correction_probs.argmax(dim=-1).to(torch.int32)
+                    else:
+                        corrected_token = torch.multinomial(
+                            correction_probs, num_samples=1
+                        ).squeeze(-1).to(torch.int32)
+                                            
+                    temp_predict[reject_rows, reject_ri] = corrected_token
 
                 step_indices = torch.arange(draft_token_num, device=device, dtype=torch.long).unsqueeze(0)  # [1, draft_token_num]
-                valid_pos_mask = (step_indices <= ri) & (step_indices < spec_steps)  # [bs, draft_token_num]
-                opd_evict_mask = ~((step_indices < ri) & (step_indices < spec_steps)) & (reject_indices.view(bs, 1) < spec_steps)  # [bs, draft_token_num]
+                ri_col = ri.unsqueeze(-1)  # [bs,1]
+                valid_pos_mask = (step_indices <= ri_col) & (step_indices < spec_steps)  # [bs, draft_token_num]
+                opd_evict_mask = ~((step_indices < ri_col) & (step_indices < spec_steps)) & has_rejection.view(bs, 1)  # [bs, draft_token_num]
                 opd_evict_mask = opd_evict_mask[:, :spec_steps]
 
                 temp_predict.masked_fill_(~valid_pos_mask, pad_value)
