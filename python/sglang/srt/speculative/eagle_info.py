@@ -413,8 +413,12 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
 
                 step_indices = torch.arange(draft_token_num, device=device, dtype=torch.long).unsqueeze(0)  # [1, draft_token_num]
                 ri_col = ri.unsqueeze(-1)  # [bs,1]
-                valid_pos_mask = (step_indices <= ri_col) & (step_indices < spec_steps)  # [bs, draft_token_num]
-                opd_evict_mask = ~((step_indices < ri_col) & (step_indices < spec_steps)) & has_rejection.view(bs, 1)  # [bs, draft_token_num]
+                valid_pos_mask = (step_indices <= ri_col)  # [bs, draft_token_num]
+                # Mark rejected draft positions: from first rejected token onward.
+                opd_evict_mask = (
+                    (step_indices >= ri_col)
+                    & has_rejection.view(bs, 1)
+                )  # [bs, draft_token_num]
                 opd_evict_mask = opd_evict_mask[:, :spec_steps]
 
                 temp_predict.masked_fill_(~valid_pos_mask, pad_value)
