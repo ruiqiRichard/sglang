@@ -1,5 +1,6 @@
 import logging
 import time
+from copy import deepcopy
 from typing import List, Optional, Tuple
 
 import torch
@@ -904,7 +905,11 @@ class EAGLEWorker(TpModelWorker):
             detect_nan(logits_output)
         assert isinstance(forward_batch.spec_info, EagleDraftInput)
         assert forward_batch.spec_info is batch.spec_info
-        self.capture_for_decode(logits_output, forward_batch.spec_info)
+        self.capture_for_decode(
+            logits_output,
+            forward_batch.spec_info,
+            forward_batch.sampling_info,
+        )
         has_finished, unfinished_req_index = False, []
         for i, req in enumerate(batch.reqs):
             if req.finished():
@@ -962,6 +967,43 @@ class EAGLEWorker(TpModelWorker):
 
         batch.return_hidden_states = False
         model_worker_batch = batch.get_model_worker_batch()
+        # `prepare_extend_after_decode` may shrink req/sequence tensors to unfinished requests.
+        # Keep sampling params aligned to avoid shape mismatches in OPD resampling.
+        if (
+            self.server_args.speculative_algorithm == "STANDALONE_OPD"
+            and self.topk == 1
+            and model_worker_batch.sampling_info is not None
+            and len(model_worker_batch.sampling_info)
+            != len(model_worker_batch.req_pool_indices)
+        ):
+            req_pool_old = req_pool_indices_backup.tolist()
+            req_pool_new = model_worker_batch.req_pool_indices.tolist()
+            req_pool_to_old_idx = {
+                int(req_id): i for i, req_id in enumerate(req_pool_old)
+            }
+            keep_indices = [
+                req_pool_to_old_idx[int(req_id)]
+                for req_id in req_pool_new
+                if int(req_id) in req_pool_to_old_idx
+            ]
+            if len(keep_indices) == len(req_pool_new):
+                filtered_sampling_info = deepcopy(model_worker_batch.sampling_info)
+                keep_indices_device = torch.tensor(
+                    keep_indices,
+                    dtype=torch.int64,
+                    device=filtered_sampling_info.temperatures.device,
+                )
+                filtered_sampling_info.filter_batch(
+                    keep_indices, keep_indices_device
+                )
+                model_worker_batch.sampling_info = filtered_sampling_info
+            else:
+                logger.warning(
+                    "Failed to align sampling_info after decode extend: "
+                    "matched %d / %d req_pool_indices.",
+                    len(keep_indices),
+                    len(req_pool_new),
+                )
         assert model_worker_batch.capture_hidden_mode == CaptureHiddenMode.LAST
         forward_batch = ForwardBatch.init_new(
             model_worker_batch, self.draft_model_runner
@@ -980,11 +1022,23 @@ class EAGLEWorker(TpModelWorker):
             logits_output = self.cuda_graph_runner_for_draft_extend.replay(
                 forward_batch
             )
-            forward_batch.spec_info.topk_p, forward_batch.spec_info.topk_index = (
-                logits_output.topk_p,
-                logits_output.topk_index,
-            )
-            forward_batch.spec_info.hidden_states = logits_output.hidden_states
+            if (
+                self.server_args.speculative_algorithm == "STANDALONE_OPD"
+                and self.topk == 1
+            ):
+                # CUDA graph path computes topk greedily in graph capture.
+                # Re-sample outside the graph for OPD to respect runtime sampling params.
+                self.capture_for_decode(
+                    logits_output,
+                    forward_batch.spec_info,
+                    forward_batch.sampling_info,
+                )
+            else:
+                forward_batch.spec_info.topk_p, forward_batch.spec_info.topk_index = (
+                    logits_output.topk_p,
+                    logits_output.topk_index,
+                )
+                forward_batch.spec_info.hidden_states = logits_output.hidden_states
         else:
             forward_batch.can_run_dp_cuda_graph = False
             if not forward_batch.forward_mode.is_idle():
@@ -994,7 +1048,11 @@ class EAGLEWorker(TpModelWorker):
             logits_output, _ = self.draft_model_runner.forward(
                 forward_batch, skip_attn_backend_init=True
             )
-            self.capture_for_decode(logits_output, forward_batch.spec_info)
+            self.capture_for_decode(
+                logits_output,
+                forward_batch.spec_info,
+                forward_batch.sampling_info,
+            )
 
         if self.enable_nan_detection:
             detect_nan(logits_output)
@@ -1011,10 +1069,27 @@ class EAGLEWorker(TpModelWorker):
         batch.return_logprob = return_logprob_backup
 
     def capture_for_decode(
-        self, logits_output: LogitsProcessorOutput, draft_input: EagleDraftInput
+        self,
+        logits_output: LogitsProcessorOutput,
+        draft_input: EagleDraftInput,
+        sampling_info=None,
     ):
-        probs = torch.softmax(logits_output.next_token_logits, dim=-1)
-        draft_input.topk_p, draft_input.topk_index = fast_topk(probs, self.topk, dim=-1)
+        if (
+            self.server_args.speculative_algorithm == "STANDALONE_OPD"
+            and self.topk == 1
+            and sampling_info is not None
+        ):
+            draft_input.topk_p, draft_input.topk_index = fast_sampling(
+                logits_output.next_token_logits,
+                sampling_info.top_ks,
+                sampling_info.top_ps,
+                sampling_info.temperatures,
+            )
+        else:
+            probs = torch.softmax(logits_output.next_token_logits, dim=-1)
+            draft_input.topk_p, draft_input.topk_index = fast_topk(
+                probs, self.topk, dim=-1
+            )
         draft_input.hidden_states = logits_output.hidden_states
 
 

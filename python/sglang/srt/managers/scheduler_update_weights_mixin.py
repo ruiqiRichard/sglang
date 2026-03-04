@@ -39,10 +39,16 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerUpdateWeightsMixin:
+    def _get_online_weight_worker(self):
+        # In STANDALONE_OPD, the online-updated policy lives on the draft worker.
+        if self.server_args.speculative_algorithm == "STANDALONE_OPD":
+            return self.draft_worker
+        return self.tp_worker
 
     def update_weights_from_disk(self, recv_req: UpdateWeightFromDiskReqInput):
         """In-place update of the weights from disk."""
-        success, message = self.tp_worker.update_weights_from_disk(recv_req)
+        worker = self._get_online_weight_worker()
+        success, message = worker.update_weights_from_disk(recv_req)
         if success:
             flush_cache_success = self.flush_cache()
             assert flush_cache_success, "Cache flush failed after updating weights"
@@ -65,7 +71,8 @@ class SchedulerUpdateWeightsMixin:
         recv_req: UpdateWeightsFromDistributedReqInput,
     ) -> Tuple[bool, str]:
         """Update the online model parameter."""
-        success, message = self.tp_worker.update_weights_from_distributed(recv_req)
+        worker = self._get_online_weight_worker()
+        success, message = worker.update_weights_from_distributed(recv_req)
         if success:
             if recv_req.flush_cache:
                 flush_cache_success = self.flush_cache()
@@ -76,7 +83,7 @@ class SchedulerUpdateWeightsMixin:
 
     def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
         """Update the online model parameter from tensors."""
-        worker = self.draft_worker if self.server_args.speculative_algorithm == "STANDALONE_OPD" else self.tp_worker
+        worker = self._get_online_weight_worker()
         success, message = worker.update_weights_from_tensor(recv_req)
         # TODO extract common code b/t update_weights_from_distributed and update_weights_from_tensor later
         if success:
@@ -90,7 +97,8 @@ class SchedulerUpdateWeightsMixin:
 
     def update_weights_from_ipc(self, recv_req: UpdateWeightsFromIPCReqInput):
         """Update the online model parameter from IPC for checkpoint-engine integration."""
-        success, message = self.tp_worker.update_weights_from_ipc(recv_req)
+        worker = self._get_online_weight_worker()
+        success, message = worker.update_weights_from_ipc(recv_req)
         if success:
             if recv_req.flush_cache:
                 flush_cache_success = self.flush_cache()
