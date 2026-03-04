@@ -1022,23 +1022,11 @@ class EAGLEWorker(TpModelWorker):
             logits_output = self.cuda_graph_runner_for_draft_extend.replay(
                 forward_batch
             )
-            if (
-                self.server_args.speculative_algorithm == "STANDALONE_OPD"
-                and self.topk == 1
-            ):
-                # CUDA graph path computes topk greedily in graph capture.
-                # Re-sample outside the graph for OPD to respect runtime sampling params.
-                self.capture_for_decode(
-                    logits_output,
-                    forward_batch.spec_info,
-                    forward_batch.sampling_info,
-                )
-            else:
-                forward_batch.spec_info.topk_p, forward_batch.spec_info.topk_index = (
-                    logits_output.topk_p,
-                    logits_output.topk_index,
-                )
-                forward_batch.spec_info.hidden_states = logits_output.hidden_states
+            forward_batch.spec_info.topk_p, forward_batch.spec_info.topk_index = (
+                logits_output.topk_p,
+                logits_output.topk_index,
+            )
+            forward_batch.spec_info.hidden_states = logits_output.hidden_states
         else:
             forward_batch.can_run_dp_cuda_graph = False
             if not forward_batch.forward_mode.is_idle():

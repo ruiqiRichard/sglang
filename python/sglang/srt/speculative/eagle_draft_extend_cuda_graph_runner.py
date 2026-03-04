@@ -25,6 +25,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.speculative.eagle_info import EagleDraftInput
 from sglang.srt.speculative.spec_utils import fast_topk
+from sglang.srt.utils.common import fast_sampling
 from sglang.srt.utils import (
     require_attn_tp_gather,
     require_gathered_buffer,
@@ -155,6 +156,11 @@ class EAGLEDraftExtendCudaGraphRunner:
                 (self.max_bs, vocab_size),
                 dtype=torch.float,
             )
+            self.sampling_temperatures = torch.ones(
+                (self.max_bs, 1), dtype=torch.float
+            )
+            self.sampling_top_ps = torch.ones((self.max_bs,), dtype=torch.float)
+            self.sampling_top_ks = torch.ones((self.max_bs,), dtype=torch.int32)
 
         # Capture
         try:
@@ -207,6 +213,9 @@ class EAGLEDraftExtendCudaGraphRunner:
         mrope_positions = self.mrope_positions[:, :num_tokens]
         hidden_states = self.hidden_states[:num_tokens]
         next_token_logits_buffer = self.next_token_logits_buffer[:bs]
+        sampling_temperatures = self.sampling_temperatures[:bs]
+        sampling_top_ps = self.sampling_top_ps[:bs]
+        sampling_top_ks = self.sampling_top_ks[:bs]
 
         if self.require_mlp_tp_gather:
             self.global_num_tokens_gpu.copy_(
@@ -310,8 +319,19 @@ class EAGLEDraftExtendCudaGraphRunner:
                 forward_batch.positions,
                 forward_batch,
             )
-            probs = torch.softmax(ret.next_token_logits, dim=-1)
-            ret.topk_p, ret.topk_index = fast_topk(probs, self.topk, dim=-1)
+            if (
+                self.model_runner.server_args.speculative_algorithm == "STANDALONE_OPD"
+                and self.topk == 1
+            ):
+                ret.topk_p, ret.topk_index = fast_sampling(
+                    ret.next_token_logits,
+                    sampling_top_ks,
+                    sampling_top_ps,
+                    sampling_temperatures,
+                )
+            else:
+                probs = torch.softmax(ret.next_token_logits, dim=-1)
+                ret.topk_p, ret.topk_index = fast_topk(probs, self.topk, dim=-1)
 
             forward_batch.out_cache_loc = output_cache_loc_backup
             forward_batch.spec_info.hidden_states = hidden_states_backup
@@ -373,6 +393,16 @@ class EAGLEDraftExtendCudaGraphRunner:
         if forward_batch.spec_info.accept_length is not None:
             self.accept_length[:raw_bs].copy_(forward_batch.spec_info.accept_length)
         self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
+        if forward_batch.sampling_info is not None:
+            if bs != raw_bs:
+                self.sampling_temperatures[:bs].fill_(1.0)
+                self.sampling_top_ps[:bs].fill_(1.0)
+                self.sampling_top_ks[:bs].fill_(1)
+            self.sampling_temperatures[:raw_bs].copy_(
+                forward_batch.sampling_info.temperatures
+            )
+            self.sampling_top_ps[:raw_bs].copy_(forward_batch.sampling_info.top_ps)
+            self.sampling_top_ks[:raw_bs].copy_(forward_batch.sampling_info.top_ks)
 
         # TODO(ch-wan): support num_token_non_padded
         if self.require_gathered_buffer:
