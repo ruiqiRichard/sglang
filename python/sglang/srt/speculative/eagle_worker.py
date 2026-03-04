@@ -1,6 +1,5 @@
 import logging
 import time
-from copy import deepcopy
 from typing import List, Optional, Tuple
 
 import torch
@@ -967,43 +966,6 @@ class EAGLEWorker(TpModelWorker):
 
         batch.return_hidden_states = False
         model_worker_batch = batch.get_model_worker_batch()
-        # `prepare_extend_after_decode` may shrink req/sequence tensors to unfinished requests.
-        # Keep sampling params aligned to avoid shape mismatches in OPD resampling.
-        if (
-            self.server_args.speculative_algorithm == "STANDALONE_OPD"
-            and self.topk == 1
-            and model_worker_batch.sampling_info is not None
-            and len(model_worker_batch.sampling_info)
-            != len(model_worker_batch.req_pool_indices)
-        ):
-            req_pool_old = req_pool_indices_backup.tolist()
-            req_pool_new = model_worker_batch.req_pool_indices.tolist()
-            req_pool_to_old_idx = {
-                int(req_id): i for i, req_id in enumerate(req_pool_old)
-            }
-            keep_indices = [
-                req_pool_to_old_idx[int(req_id)]
-                for req_id in req_pool_new
-                if int(req_id) in req_pool_to_old_idx
-            ]
-            if len(keep_indices) == len(req_pool_new):
-                filtered_sampling_info = deepcopy(model_worker_batch.sampling_info)
-                keep_indices_device = torch.tensor(
-                    keep_indices,
-                    dtype=torch.int64,
-                    device=filtered_sampling_info.temperatures.device,
-                )
-                filtered_sampling_info.filter_batch(
-                    keep_indices, keep_indices_device
-                )
-                model_worker_batch.sampling_info = filtered_sampling_info
-            else:
-                logger.warning(
-                    "Failed to align sampling_info after decode extend: "
-                    "matched %d / %d req_pool_indices.",
-                    len(keep_indices),
-                    len(req_pool_new),
-                )
         assert model_worker_batch.capture_hidden_mode == CaptureHiddenMode.LAST
         forward_batch = ForwardBatch.init_new(
             model_worker_batch, self.draft_model_runner

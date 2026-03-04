@@ -399,10 +399,10 @@ class EAGLEDraftExtendCudaGraphRunner:
                 self.sampling_top_ps[:bs].fill_(1.0)
                 self.sampling_top_ks[:bs].fill_(1)
             self.sampling_temperatures[:raw_bs].copy_(
-                forward_batch.sampling_info.temperatures
+                forward_batch.sampling_info.temperatures[:raw_bs]
             )
-            self.sampling_top_ps[:raw_bs].copy_(forward_batch.sampling_info.top_ps)
-            self.sampling_top_ks[:raw_bs].copy_(forward_batch.sampling_info.top_ks)
+            self.sampling_top_ps[:raw_bs].copy_(forward_batch.sampling_info.top_ps[:raw_bs])
+            self.sampling_top_ks[:raw_bs].copy_(forward_batch.sampling_info.top_ks[:raw_bs])
 
         # TODO(ch-wan): support num_token_non_padded
         if self.require_gathered_buffer:

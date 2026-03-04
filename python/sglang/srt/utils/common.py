@@ -2543,21 +2543,22 @@ def fast_sampling(logits, top_ks, top_ps, temperatures):
         top_ps: (batch_size,) - Tensor of floats, individual top_p per batch
         temperatures: (batch_size, 1) - Tensor of floats
     """
+    bs = logits.size(0)
     # apply temperature
     raw_probs = F.softmax(
-        logits / temperatures, dim=-1
+        logits / temperatures[:bs], dim=-1
     )
 
     # top-k filtering
     probs = top_k_renorm_prob(
         raw_probs,
-        top_ks,
+        top_ks[:bs],
     )
 
     # top-p filtering
     probs = top_p_renorm_prob(
         probs,
-        top_ps,
+        top_ps[:bs],
     )
 
     # sample
