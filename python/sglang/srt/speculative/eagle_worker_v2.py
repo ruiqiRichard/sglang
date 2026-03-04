@@ -174,13 +174,20 @@ class EagleDraftWorker(BaseDraftWorker):
                 )
 
         else:
-            if self.hot_token_id is not None:
-                head = head.clone()
-                self.hot_token_id = self.hot_token_id.to(head.device)
-                head.data = head.data[self.hot_token_id]
+            if self.server_args.speculative_algorithm == "STANDALONE_OPD":
+                # In OPD, draft/target can be different checkpoints (student/teacher).
+                # Keep draft's native embed/lm_head to preserve its own token distribution.
+                logger.info(
+                    "STANDALONE_OPD: keep draft model's native embedding/lm_head."
+                )
+            else:
+                if self.hot_token_id is not None:
+                    head = head.clone()
+                    self.hot_token_id = self.hot_token_id.to(head.device)
+                    head.data = head.data[self.hot_token_id]
 
-            # Share the embedding and lm_head
-            self.draft_runner.model.set_embed_and_head(embed, head)
+                # Share the embedding and lm_head
+                self.draft_runner.model.set_embed_and_head(embed, head)
 
     def init_attention_backend(self):
         # Create multi-step attn backends and cuda graph runners
