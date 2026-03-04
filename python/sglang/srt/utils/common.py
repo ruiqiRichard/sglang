@@ -122,12 +122,6 @@ builtins.FP8_E4M3_MIN = FP8_E4M3_MIN
 def is_cuda():
     return torch.cuda.is_available() and torch.version.cuda
 
-if is_cuda():
-    from sgl_kernel import (
-        top_k_renorm_prob,
-        top_p_renorm_prob,
-    )
-
 def is_cuda_alike():
     return is_cuda() or is_hip()
 
@@ -2535,34 +2529,51 @@ def fast_topk(values, topk, dim):
         # Use topk for efficiency with larger k values
         return torch.topk(values, topk, dim=dim)
 
-def fast_sampling(logits, top_ks, top_ps, temperatures):
+def fast_sampling(
+    logits,
+    top_ks,
+    top_ps,
+    temperatures,
+    min_ps=None,
+    need_min_p_sampling: bool = False,
+    sampling_backend="flashinfer",
+):
     """
     Args:
         logits: (batch_size, vocab_size)
         top_ks: (batch_size,) - Tensor of ints, individual top_k per batch
         top_ps: (batch_size,) - Tensor of floats, individual top_p per batch
         temperatures: (batch_size, 1) - Tensor of floats
+        min_ps: (batch_size,) - Tensor of floats, individual min_p per batch
+        need_min_p_sampling: bool - whether any request in the batch uses min_p
+        sampling_backend: str - The backend to use for sampling
     """
     bs = logits.size(0)
+    top_ks = top_ks[:bs]
+    top_ps = top_ps[:bs]
+    use_min_p = need_min_p_sampling and min_ps is not None
+
     # apply temperature
-    raw_probs = F.softmax(
-        logits / temperatures[:bs], dim=-1
+    raw_probs = F.softmax(logits / temperatures[:bs], dim=-1)
+    min_ps = (
+        min_ps[:bs]
+        if min_ps is not None
+        else torch.zeros((bs,), dtype=raw_probs.dtype, device=raw_probs.device)
     )
 
-    # top-k filtering
-    probs = top_k_renorm_prob(
-        raw_probs,
-        top_ks[:bs],
+    from sglang.srt.layers.sampler import top_k_top_p_min_p_sampling_from_probs_torch
+    chosen_indices = top_k_top_p_min_p_sampling_from_probs_torch(
+        probs=raw_probs,
+        top_ks=top_ks,
+        top_ps=top_ps,
+        min_ps=min_ps,
+        need_min_p_sampling=use_min_p,
+        sampling_seed=None,
+        positions=torch.zeros((bs,), dtype=torch.int64, device=raw_probs.device),
     )
 
-    # top-p filtering
-    probs = top_p_renorm_prob(
-        probs,
-        top_ps[:bs],
-    )
-
-    # sample
-    chosen_indices = torch.multinomial(probs, num_samples=1)
+    if chosen_indices.dim() == 1:
+        chosen_indices = chosen_indices.view(-1, 1)
     chosen_p = torch.gather(raw_probs, -1, chosen_indices)
 
     return chosen_p, chosen_indices

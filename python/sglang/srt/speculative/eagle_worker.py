@@ -642,7 +642,11 @@ class EAGLEWorker(TpModelWorker):
                     logits_output.next_token_logits, 
                     forward_batch.sampling_info.top_ks,
                     forward_batch.sampling_info.top_ps,
-                    forward_batch.sampling_info.temperatures)
+                    forward_batch.sampling_info.temperatures,
+                    forward_batch.sampling_info.min_ps,
+                    forward_batch.sampling_info.need_min_p_sampling,
+                    self.server_args.sampling_backend,
+                )
             else:
                 probs = torch.softmax(logits_output.next_token_logits, dim=-1)
                 topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
@@ -1034,6 +1038,9 @@ class EAGLEWorker(TpModelWorker):
                 sampling_info.top_ks,
                 sampling_info.top_ps,
                 sampling_info.temperatures,
+                sampling_info.min_ps,
+                sampling_info.need_min_p_sampling,
+                self.server_args.sampling_backend,
             )
         else:
             probs = torch.softmax(logits_output.next_token_logits, dim=-1)
