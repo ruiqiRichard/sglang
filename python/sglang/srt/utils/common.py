@@ -122,6 +122,14 @@ builtins.FP8_E4M3_MIN = FP8_E4M3_MIN
 def is_cuda():
     return torch.cuda.is_available() and torch.version.cuda
 
+if is_cuda():
+    from sgl_kernel import (
+        top_k_renorm_prob,
+        top_p_renorm_prob,
+        min_p_sampling_from_probs,
+        top_p_sampling_from_probs,
+    )
+
 def is_cuda_alike():
     return is_cuda() or is_hip()
 
@@ -2560,17 +2568,25 @@ def fast_sampling(
         if min_ps is not None
         else torch.zeros((bs,), dtype=raw_probs.dtype, device=raw_probs.device)
     )
-
-    from sglang.srt.layers.sampler import top_k_top_p_min_p_sampling_from_probs_torch
-    chosen_indices = top_k_top_p_min_p_sampling_from_probs_torch(
-        probs=raw_probs,
-        top_ks=top_ks,
-        top_ps=top_ps,
-        min_ps=min_ps,
-        need_min_p_sampling=use_min_p,
-        sampling_seed=None,
-        positions=torch.zeros((bs,), dtype=torch.int64, device=raw_probs.device),
-    )
+    if sampling_backend == "flashinfer":
+        probs = top_k_renorm_prob(raw_probs, top_ks)
+        chosen_indices = top_p_sampling_from_probs(
+            probs,
+            top_ps,
+        )
+    elif sampling_backend == "pytorch":
+        from sglang.srt.layers.sampler import top_k_top_p_min_p_sampling_from_probs_torch
+        chosen_indices = top_k_top_p_min_p_sampling_from_probs_torch(
+            probs=raw_probs,
+            top_ks=top_ks,
+            top_ps=top_ps,
+            min_ps=min_ps,
+            need_min_p_sampling=use_min_p,
+            sampling_seed=None,
+            positions=torch.zeros((bs,), dtype=torch.int64, device=raw_probs.device),
+        )
+    else:
+        raise ValueError(f"Unsupported sampling backend: {sampling_backend}")
 
     if chosen_indices.dim() == 1:
         chosen_indices = chosen_indices.view(-1, 1)
