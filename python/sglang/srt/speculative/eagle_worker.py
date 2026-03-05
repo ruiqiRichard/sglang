@@ -688,6 +688,8 @@ class EAGLEWorker(TpModelWorker):
         pass
 
     def verify(self, batch: ScheduleBatch, spec_info: EagleVerifyInput):
+        # Preserve the previous draft hidden states as a best-effort source for OPD.
+        prev_hidden_states = getattr(batch.spec_info, "hidden_states", None)
         spec_info.prepare_for_verify(batch, self.page_size)
         batch.return_hidden_states = False
         batch.forward_mode = (
@@ -741,7 +743,17 @@ class EAGLEWorker(TpModelWorker):
         if self.enable_nan_detection:
             detect_nan(logits_output)
 
-        spec_info.hidden_states = logits_output.hidden_states
+        # `EagleVerifyInput.verify()` expects `batch.spec_info.hidden_states` to exist.
+        # For OPD, prefer preserved draft hidden states if shape-compatible; otherwise
+        # fall back to target hidden states to keep the pipeline valid.
+        if (
+            self.server_args.speculative_algorithm == "STANDALONE_OPD"
+            and prev_hidden_states is not None
+            and prev_hidden_states.shape == logits_output.hidden_states.shape
+        ):
+            spec_info.hidden_states = prev_hidden_states
+        else:
+            spec_info.hidden_states = logits_output.hidden_states
         res: EagleVerifyOutput = spec_info.verify(
             batch,
             logits_output,
