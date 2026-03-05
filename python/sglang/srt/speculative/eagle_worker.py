@@ -568,6 +568,16 @@ class EAGLEWorker(TpModelWorker):
             seq_lens_cpu=forward_batch.seq_lens_cpu,
         )
 
+    def _preprocess_opd_draft_logits(
+        self, logits_output: LogitsProcessorOutput, sampling_info
+    ):
+        # Keep OPD draft sampling on the same preprocessed logits pipeline
+        # as regular decoding (penalty/mask/logit-bias/custom processors).
+        self.draft_model_runner._preprocess_logits(logits_output, sampling_info)
+        logits_output.next_token_logits = self.draft_model_runner.sampler._preprocess_logits(
+            logits_output.next_token_logits, sampling_info
+        )
+
     def draft_forward(self, forward_batch: ForwardBatch):
         # Parse args
         spec_info = forward_batch.spec_info
@@ -645,6 +655,9 @@ class EAGLEWorker(TpModelWorker):
             if self.server_args.enable_nan_detection:
                 detect_nan(logits_output)
             if self.server_args.speculative_algorithm == "STANDALONE_OPD":
+                self._preprocess_opd_draft_logits(
+                    logits_output, forward_batch.sampling_info
+                )
                 topk_p, topk_index = fast_sampling(
                     logits_output.next_token_logits, 
                     forward_batch.sampling_info.top_ks,
@@ -1040,6 +1053,7 @@ class EAGLEWorker(TpModelWorker):
             and self.topk == 1
             and sampling_info is not None
         ):
+            self._preprocess_opd_draft_logits(logits_output, sampling_info)
             draft_input.topk_p, draft_input.topk_index = fast_sampling(
                 logits_output.next_token_logits,
                 sampling_info.top_ks,
