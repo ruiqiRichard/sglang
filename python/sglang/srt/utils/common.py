@@ -2570,10 +2570,8 @@ def fast_sampling(
     )
     if sampling_backend == "flashinfer":
         probs = top_k_renorm_prob(raw_probs, top_ks)
-        chosen_indices = top_p_sampling_from_probs(
-            probs,
-            top_ps,
-        )
+        probs = top_p_renorm_prob(probs, top_ps)
+        chosen_indices = torch.multinomial(probs, num_samples=1)
     elif sampling_backend == "pytorch":
         from sglang.srt.layers.sampler import top_k_top_p_min_p_sampling_from_probs_torch
         chosen_indices = top_k_top_p_min_p_sampling_from_probs_torch(
