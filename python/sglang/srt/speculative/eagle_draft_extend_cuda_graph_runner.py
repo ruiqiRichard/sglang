@@ -325,7 +325,7 @@ class EAGLEDraftExtendCudaGraphRunner:
                 self.model_runner.server_args.speculative_algorithm == "STANDALONE_OPD"
                 and self.topk == 1
             ):
-                ret.topk_p, ret.topk_index = fast_sampling(
+                ret.topk_p, ret.topk_index, ret.topk_full_probs = fast_sampling(
                     ret.next_token_logits,
                     sampling_top_ks,
                     sampling_top_ps,
@@ -333,6 +333,7 @@ class EAGLEDraftExtendCudaGraphRunner:
                     sampling_min_ps,
                     False,
                     self.model_runner.server_args.sampling_backend,
+                    return_raw_probs=True,
                 )
             else:
                 probs = torch.softmax(ret.next_token_logits, dim=-1)
@@ -452,4 +453,5 @@ class EAGLEDraftExtendCudaGraphRunner:
             )
             out.topk_p = out_copy.topk_p[:raw_bs]
             out.topk_index = out_copy.topk_index[:raw_bs]
+            out.topk_full_probs = out_copy.topk_full_probs[:raw_bs] if hasattr(out_copy, "topk_full_probs") else None
         return out

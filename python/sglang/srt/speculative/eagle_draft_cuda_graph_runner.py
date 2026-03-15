@@ -61,6 +61,16 @@ class EAGLEDraftCudaGraphRunner:
         self.tp_size = self.model_runner.tp_size
         self.topk = model_runner.server_args.speculative_eagle_topk
         self.speculative_num_steps = model_runner.server_args.speculative_num_steps
+        if hasattr(self.model_runner.model_config.hf_config, "draft_vocab_size"):
+            self.draft_vocab_size = (
+                self.model_runner.model_config.hf_config.draft_vocab_size
+            )
+        elif hasattr(self.model_runner.model_config.hf_config, "hot_vocab_size"):
+            self.draft_vocab_size = (
+                self.model_runner.model_config.hf_config.hot_vocab_size
+            )
+        else:
+            self.draft_vocab_size = self.model_runner.model_config.vocab_size
         self.enable_profile_cuda_graph = (
             model_runner.server_args.enable_profile_cuda_graph
         )
@@ -105,6 +115,9 @@ class EAGLEDraftCudaGraphRunner:
             )
             self.topk_p = torch.zeros((self.max_bs, self.topk), dtype=torch.float32)
             self.topk_index = torch.zeros((self.max_bs, self.topk), dtype=torch.int64)
+            self.topk_full_probs = torch.zeros(
+                (self.max_bs, self.draft_vocab_size), dtype=torch.float32
+            )
             self.hidden_states = torch.zeros(
                 (self.max_bs, self.model_runner.model_config.hidden_size),
                 dtype=self.model_runner.dtype,
@@ -183,6 +196,7 @@ class EAGLEDraftCudaGraphRunner:
         mrope_positions = self.mrope_positions[:, :num_tokens]
         topk_p = self.topk_p[:num_seqs]
         topk_index = self.topk_index[:num_seqs]
+        topk_full_probs = self.topk_full_probs[:num_seqs]
         hidden_states = self.hidden_states[:num_seqs]
 
         if self.require_mlp_tp_gather:
@@ -229,6 +243,12 @@ class EAGLEDraftCudaGraphRunner:
         spec_info = EagleDraftInput(
             topk_p=topk_p,
             topk_index=topk_index,
+            topk_full_probs=(
+                topk_full_probs
+                if self.model_runner.server_args.speculative_algorithm
+                == "STANDALONE_OPD"
+                else None
+            ),
             hidden_states=hidden_states,
             capture_hidden_mode=CaptureHiddenMode.LAST,
         )
@@ -242,7 +262,7 @@ class EAGLEDraftCudaGraphRunner:
             need_top_k_sampling=False,
             need_top_p_sampling=False,
             need_min_p_sampling=False,
-            vocab_size=1,
+            vocab_size=self.draft_vocab_size,
         )
 
         # Forward batch
@@ -318,8 +338,16 @@ class EAGLEDraftCudaGraphRunner:
 
     def _postprocess_output_to_raw_bs(self, out, raw_bs):
         # Keep the variables name for readability
-        parent_list, top_scores_index, draft_tokens, draft_token_probs = (t[:raw_bs] for t in out)
-        return parent_list, top_scores_index, draft_tokens, draft_token_probs
+        parent_list, top_scores_index, draft_tokens, draft_token_probs, draft_token_full_probs = (
+            t[:raw_bs] if t is not None else None for t in out
+        )
+        return (
+            parent_list,
+            top_scores_index,
+            draft_tokens,
+            draft_token_probs,
+            draft_token_full_probs,
+        )
 
     def replay(self, forward_batch: ForwardBatch):
         assert forward_batch.out_cache_loc is not None
@@ -356,6 +384,8 @@ class EAGLEDraftCudaGraphRunner:
         self.positions[:raw_num_token].copy_(forward_batch.positions)
         self.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p)
         self.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index)
+        if forward_batch.spec_info.topk_full_probs is not None:
+            self.topk_full_probs[:raw_bs].copy_(forward_batch.spec_info.topk_full_probs)
         self.hidden_states[:raw_bs].copy_(forward_batch.spec_info.hidden_states)
         if forward_batch.sampling_info is not None:
             if bs != raw_bs:

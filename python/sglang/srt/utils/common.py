@@ -2545,6 +2545,7 @@ def fast_sampling(
     min_ps=None,
     need_min_p_sampling: bool = False,
     sampling_backend="flashinfer",
+    return_raw_probs: bool = False,
 ):
     """
     Args:
@@ -2590,6 +2591,8 @@ def fast_sampling(
         chosen_indices = chosen_indices.view(-1, 1)
     chosen_p = torch.gather(raw_probs, -1, chosen_indices)
 
+    if return_raw_probs:
+        return chosen_p, chosen_indices, raw_probs
     return chosen_p, chosen_indices
 
 @torch.compile(dynamic=True)

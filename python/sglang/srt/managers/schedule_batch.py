@@ -618,8 +618,8 @@ class Req:
             ] = []
             self.output_token_ids_logprobs_idx = []
             # opd related
-            self.opd_evict_mask = [1]
-            self.opd_teacher_logprobs_val = [0.0]
+            self.opd_evict_mask = []
+            self.opd_teacher_logprobs_val = []
         else:
             self.output_token_logprobs_val = self.output_token_logprobs_idx = (
                 self.output_top_logprobs_val

@@ -270,12 +270,19 @@ class EAGLEWorker(TpModelWorker):
             logits_output, next_token_ids, seq_lens_cpu = self.forward_target_extend(
                 batch
             )
+            if logits_output.next_token_logprobs is not None:
+                for req, next_token_logprobs in zip(batch.reqs, logits_output.next_token_logprobs.tolist()):
+                    req.opd_teacher_logprobs_val.append(next_token_logprobs)
+                    req.opd_evict_mask.append(1)
+                    
             with self.draft_tp_context(
                 self.draft_model_runner.tp_group
             ), speculative_moe_backend_context():
-                self.forward_draft_extend(
+                target_extend_draft_logprobs = self.forward_draft_extend(
                     batch, logits_output.hidden_states, next_token_ids, seq_lens_cpu
                 )
+            if target_extend_draft_logprobs is not None:
+                logits_output.next_token_logprobs = target_extend_draft_logprobs     
             return GenerationBatchResult(
                 logits_output=logits_output,
                 next_token_ids=next_token_ids,
@@ -481,6 +488,7 @@ class EAGLEWorker(TpModelWorker):
             hidden_size=self.model_config.hidden_size,
             dtype=self.model_config.dtype,
             topk=self.topk,
+            vocab_size=self.model_config.vocab_size,
             capture_hidden_mode=CaptureHiddenMode.LAST,
         )
 
@@ -509,7 +517,13 @@ class EAGLEWorker(TpModelWorker):
             forward_batch
         )
         if can_cuda_graph:
-            parent_list, top_scores_index, draft_tokens, draft_token_probs = self.cuda_graph_runner.replay(
+            (
+                parent_list,
+                top_scores_index,
+                draft_tokens,
+                draft_token_probs,
+                draft_token_full_probs,
+            ) = self.cuda_graph_runner.replay(
                 forward_batch
             )
         else:
@@ -521,7 +535,13 @@ class EAGLEWorker(TpModelWorker):
                 # Skip attention backend init for idle mode or 1-step draft
                 self.draft_attn_backend.init_forward_metadata(forward_batch)
             # Run forward steps
-            parent_list, top_scores_index, draft_tokens, draft_token_probs = self.draft_forward(
+            (
+                parent_list,
+                top_scores_index,
+                draft_tokens,
+                draft_token_probs,
+                draft_token_full_probs,
+            ) = self.draft_forward(
                 forward_batch
             )
 
@@ -554,6 +574,7 @@ class EAGLEWorker(TpModelWorker):
         return EagleVerifyInput(
             draft_token=draft_tokens,
             draft_token_probs=draft_token_probs,
+            draft_token_full_probs=draft_token_full_probs,
             custom_mask=tree_mask,
             positions=position,
             retrive_index=retrive_index,
@@ -573,10 +594,11 @@ class EAGLEWorker(TpModelWorker):
         spec_info = forward_batch.spec_info
         assert isinstance(spec_info, EagleDraftInput)
         out_cache_loc = forward_batch.out_cache_loc
-        topk_p, topk_index, hidden_states = (
+        topk_p, topk_index, hidden_states, topk_full_probs = (
             spec_info.topk_p,
             spec_info.topk_index,
             spec_info.hidden_states,
+            spec_info.topk_full_probs,
         )
         if self.hot_token_id is not None:
             topk_index = self.hot_token_id[topk_index]
@@ -592,12 +614,15 @@ class EAGLEWorker(TpModelWorker):
         score_list: List[torch.Tensor] = []
         token_list: List[torch.Tensor] = []
         token_prob_list: List[torch.Tensor] = []
+        token_full_prob_list: List[torch.Tensor] = []
         parents_list: List[torch.Tensor] = []
 
         # Forward multiple steps
         scores = None
         for i in range(self.speculative_num_steps):
             token_prob_list.append(topk_p)
+            if topk_full_probs is not None:
+                token_full_prob_list.append(topk_full_probs)
             if i == 0:
                 # The first step after extend
                 input_ids = topk_index.flatten()
@@ -645,7 +670,7 @@ class EAGLEWorker(TpModelWorker):
             if self.server_args.enable_nan_detection:
                 detect_nan(logits_output)
             if self.server_args.speculative_algorithm == "STANDALONE_OPD":
-                topk_p, topk_index = fast_sampling(
+                topk_p, topk_index, topk_full_probs = fast_sampling(
                     logits_output.next_token_logits, 
                     forward_batch.sampling_info.top_ks,
                     forward_batch.sampling_info.top_ps,
@@ -653,10 +678,12 @@ class EAGLEWorker(TpModelWorker):
                     forward_batch.sampling_info.min_ps,
                     forward_batch.sampling_info.need_min_p_sampling,
                     self.server_args.sampling_backend,
+                    return_raw_probs=True,
                 )
             else:
                 probs = torch.softmax(logits_output.next_token_logits, dim=-1)
                 topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
+                topk_full_probs = None
             if self.hot_token_id is not None:
                 topk_index = self.hot_token_id[topk_index]
             hidden_states = logits_output.hidden_states
@@ -667,8 +694,19 @@ class EAGLEWorker(TpModelWorker):
         token_prob_list = torch.stack(token_prob_list, dim=0)
         token_prob_list = token_prob_list.permute(1, 0, 2)
         token_prob_list = token_prob_list.squeeze(-1)
-
-        return parent_list, top_scores_index, draft_tokens, token_prob_list
+        if token_full_prob_list:
+            token_full_prob_list = torch.stack(token_full_prob_list, dim=0).permute(
+                1, 0, 2
+            )
+        else:
+            token_full_prob_list = None
+        return (
+            parent_list,
+            top_scores_index,
+            draft_tokens,
+            token_prob_list,
+            token_full_prob_list,
+        )
 
     def clear_cache_pool(self):
         # allocator and kv cache pool are shared with target worker
@@ -901,6 +939,33 @@ class EAGLEWorker(TpModelWorker):
             num_tokens_for_logprob_per_batch=1,
         )
         batch.return_hidden_states = False
+        need_first_opd_draft_logprob = (
+            batch.return_logprob
+            and self.server_args.speculative_algorithm == "STANDALONE_OPD"
+        )
+        target_extend_draft_logprobs = None
+        if need_first_opd_draft_logprob:
+            batch.spec_info.capture_hidden_mode = CaptureHiddenMode.NULL
+            score_model_worker_batch = batch.get_model_worker_batch(
+                seq_lens_cpu_cache=seq_lens_cpu
+            )
+            score_forward_batch = ForwardBatch.init_new(
+                score_model_worker_batch, self.draft_model_runner
+            )
+            score_forward_batch.return_logprob = False
+            score_logits_output, _ = self.draft_model_runner.forward(score_forward_batch)
+            if self.enable_nan_detection:
+                detect_nan(score_logits_output)
+            score_logprobs = torch.log_softmax(
+                score_logits_output.next_token_logits
+                / score_forward_batch.sampling_info.temperatures,
+                dim=-1,
+            )
+            target_extend_draft_logprobs = score_logprobs[
+                torch.arange(len(next_token_ids), device=next_token_ids.device),
+                next_token_ids,
+            ]
+            
         batch.spec_info.prepare_for_extend(batch)
         batch.spec_info.capture_hidden_mode = CaptureHiddenMode.LAST
         model_worker_batch = batch.get_model_worker_batch(
@@ -935,6 +1000,7 @@ class EAGLEWorker(TpModelWorker):
             batch.spec_info.filter_batch(
                 unfinished_index_device, has_been_filtered=False
             )
+        return target_extend_draft_logprobs
 
     def forward_draft_extend_after_decode(self, batch: ScheduleBatch):
         assert isinstance(batch.spec_info, EagleDraftInput)
@@ -960,6 +1026,7 @@ class EAGLEWorker(TpModelWorker):
                 hidden_size=hidden_size,
                 dtype=self.model_config.dtype,
                 topk=self.topk,
+                vocab_size=self.model_config.vocab_size,
                 capture_hidden_mode=CaptureHiddenMode.LAST,
             )
 
@@ -995,9 +1062,10 @@ class EAGLEWorker(TpModelWorker):
             logits_output = self.cuda_graph_runner_for_draft_extend.replay(
                 forward_batch
             )
-            forward_batch.spec_info.topk_p, forward_batch.spec_info.topk_index = (
+            forward_batch.spec_info.topk_p, forward_batch.spec_info.topk_index, forward_batch.spec_info.topk_full_probs = (
                 logits_output.topk_p,
                 logits_output.topk_index,
+                logits_output.topk_full_probs
             )
             forward_batch.spec_info.hidden_states = logits_output.hidden_states
         else:
@@ -1038,9 +1106,8 @@ class EAGLEWorker(TpModelWorker):
         if (
             self.server_args.speculative_algorithm == "STANDALONE_OPD"
             and self.topk == 1
-            and sampling_info is not None
         ):
-            draft_input.topk_p, draft_input.topk_index = fast_sampling(
+            draft_input.topk_p, draft_input.topk_index, draft_input.topk_full_probs = fast_sampling(
                 logits_output.next_token_logits,
                 sampling_info.top_ks,
                 sampling_info.top_ps,
@@ -1048,12 +1115,14 @@ class EAGLEWorker(TpModelWorker):
                 sampling_info.min_ps,
                 sampling_info.need_min_p_sampling,
                 self.server_args.sampling_backend,
+                return_raw_probs=True,
             )
         else:
             probs = torch.softmax(logits_output.next_token_logits, dim=-1)
             draft_input.topk_p, draft_input.topk_index = fast_topk(
                 probs, self.topk, dim=-1
             )
+            draft_input.topk_full_probs = None
         draft_input.hidden_states = logits_output.hidden_states
 
 

@@ -69,6 +69,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
     seq_lens_cpu: torch.Tensor
     grammar: BaseGrammarObject = None
     draft_token_probs: torch.Tensor = None
+    draft_token_full_probs: torch.Tensor = None
 
     def __post_init__(self):
         super().__init__(SpecInputType.EAGLE_VERIFY)
@@ -218,6 +219,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     hidden_size=batch.model_config.hidden_size,
                     dtype=batch.model_config.dtype,
                     topk=self.topk,
+                    vocab_size=batch.model_config.vocab_size,
                     capture_hidden_mode=CaptureHiddenMode.LAST,
                 ),
                 logits_output=logits_output,
@@ -408,8 +410,17 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                         corrected_token = torch.multinomial(
                             correction_probs, num_samples=1
                         ).squeeze(-1).to(torch.int32)
-                                            
+
                     temp_predict[reject_rows, reject_ri] = corrected_token
+                    if self.draft_token_full_probs is not None:
+                        corrected_draft_probs = self.draft_token_full_probs[
+                            reject_rows,
+                            reject_ri,
+                            corrected_token,
+                        ]
+                        draft_token_probs[
+                            reject_rows, reject_ri, 0
+                        ] = corrected_draft_probs
 
                 step_indices = torch.arange(draft_token_num, device=device, dtype=torch.long).unsqueeze(0)  # [1, draft_token_num]
                 ri_col = ri.unsqueeze(-1)  # [bs,1]
@@ -721,6 +732,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     hidden_size=batch.model_config.hidden_size,
                     dtype=batch.model_config.dtype,
                     topk=self.topk,
+                    vocab_size=batch.model_config.vocab_size,
                     capture_hidden_mode=CaptureHiddenMode.LAST,
                 )
 
@@ -744,6 +756,7 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
     # shape: (b, topk)
     topk_p: torch.Tensor = None
     topk_index: torch.Tensor = None
+    topk_full_probs: torch.Tensor = None
     # shape: (b, hidden_size)
     hidden_states: torch.Tensor = None
     capture_hidden_mode: CaptureHiddenMode = CaptureHiddenMode.FULL
@@ -804,6 +817,7 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
         hidden_size: int,
         dtype: torch.dtype,
         topk: int,
+        vocab_size: int,
         capture_hidden_mode: CaptureHiddenMode,
     ):
         return cls(
@@ -811,6 +825,7 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
             hidden_states=torch.empty((0, hidden_size), device=device, dtype=dtype),
             topk_p=torch.empty((0, topk), device=device, dtype=torch.float32),
             topk_index=torch.empty((0, topk), device=device, dtype=torch.int64),
+            topk_full_probs=torch.empty((0, vocab_size), device=device, dtype=torch.float32),
             capture_hidden_mode=capture_hidden_mode,
             accept_length=torch.empty((0,), device=device, dtype=torch.int32),
             accept_length_cpu=[],
@@ -898,17 +913,23 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
             if len(new_indices) > 0 and int(new_indices.max().item()) < len(self.topk_p):
                 self.topk_p = self.topk_p[new_indices]
                 self.topk_index = self.topk_index[new_indices]
+                if self.topk_full_probs is not None:
+                    self.topk_full_probs = self.topk_full_probs[new_indices]
                 self.hidden_states = self.hidden_states[new_indices]
                 self.verified_id = self.verified_id[new_indices]
                 return
             self.topk_p = self.topk_p[: len(new_indices)]
             self.topk_index = self.topk_index[: len(new_indices)]
+            if self.topk_full_probs is not None:
+                self.topk_full_probs = self.topk_full_probs[: len(new_indices)]
             self.hidden_states = self.hidden_states[: len(new_indices)]
             self.verified_id = self.verified_id[: len(new_indices)]
         else:
             # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
             self.topk_p = self.topk_p[new_indices]
             self.topk_index = self.topk_index[new_indices]
+            if self.topk_full_probs is not None:
+                self.topk_full_probs = self.topk_full_probs[new_indices]
             self.hidden_states = self.hidden_states[new_indices]
             self.verified_id = self.verified_id[new_indices]
 
@@ -930,6 +951,7 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
             self.verified_id = spec_info.verified_id
             self.topk_p = spec_info.topk_p
             self.topk_index = spec_info.topk_index
+            self.topk_full_probs = spec_info.topk_full_probs
             return
         if spec_info.hidden_states is None:
             return
@@ -939,6 +961,12 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
         self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
         self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
         self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
+        if self.topk_full_probs is None:
+            self.topk_full_probs = spec_info.topk_full_probs
+        elif spec_info.topk_full_probs is not None:
+            self.topk_full_probs = torch.cat(
+                [self.topk_full_probs, spec_info.topk_full_probs], axis=0
+            )
 
 
 @dataclass
