@@ -79,6 +79,9 @@ T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
+RELEASE_MEMORY_OCCUPATION_WAIT_TIMEOUT_SEC = 10.0
+RELEASE_MEMORY_OCCUPATION_POLL_INTERVAL_SEC = 0.1
+
 
 class _Communicator(Generic[T]):
     """Note: The communicator now only run up to 1 in-flight request at any time."""
@@ -294,6 +297,28 @@ class TokenizerCommunicatorMixin:
                 ),
             ]
         )
+
+    async def _wait_for_release_memory_occupation(
+        self: TokenizerManager,
+        timeout: float = RELEASE_MEMORY_OCCUPATION_WAIT_TIMEOUT_SEC,
+        poll_interval: float = RELEASE_MEMORY_OCCUPATION_POLL_INTERVAL_SEC,
+    ):
+        deadline = time.monotonic() + timeout
+
+        while self.rid_to_state:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                break
+            await asyncio.sleep(min(poll_interval, remaining_time))
+
+        if self.rid_to_state:
+            remaining_rids = list(self.rid_to_state.keys())
+            raise RuntimeError(
+                "release_memory_occupation requires no ongoing requests after "
+                f"waiting {timeout:.0f} seconds. "
+                f"remaining_requests={len(remaining_rids)}, "
+                f"remaining_rids={remaining_rids[:10]}"
+            )
 
     async def flush_cache(self: TokenizerManager) -> FlushCacheReqOutput:
         return (await self.flush_cache_communicator(FlushCacheReqInput()))[0]
@@ -596,6 +621,7 @@ class TokenizerCommunicatorMixin:
         request: Optional[fastapi.Request] = None,
     ):
         self.auto_create_handle_loop()
+        await self._wait_for_release_memory_occupation()
         await self.release_memory_occupation_communicator(obj)
 
     async def resume_memory_occupation(
