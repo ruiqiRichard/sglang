@@ -272,8 +272,9 @@ class EAGLEWorker(TpModelWorker):
             )
             if logits_output.next_token_logprobs is not None:
                 for req, next_token_logprobs in zip(batch.reqs, logits_output.next_token_logprobs.tolist()):
-                    req.opd_teacher_logprobs_val.append(next_token_logprobs)
-                    req.opd_evict_mask.append(1)
+                    if req.return_logprob:
+                        req.opd_teacher_logprobs_val.append(next_token_logprobs)
+                        req.opd_evict_mask.append(1)
                     
             with self.draft_tp_context(
                 self.draft_model_runner.tp_group
