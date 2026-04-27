@@ -38,7 +38,7 @@ from sglang.srt.speculative.spec_utils import (
     get_src_tgt_cache_loc,
     get_target_cache_loc,
 )
-from sglang.srt.utils import is_cuda, is_npu, next_power_of_2, peak_kl_rejection
+from sglang.srt.utils import is_cuda, is_npu, next_power_of_2, peak_kl_rejection, mix_correction
 
 _is_npu = is_npu()
 
@@ -323,6 +323,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 pad_value = -1
 
                 draft_token_probs = self.draft_token_probs.view(bs, spec_steps, -1)
+                draft_token_probs_full = self.draft_token_full_probs.view(bs, spec_steps, -1)
 
                 cand_idx = candidates[:, 1:spec_steps + 1].to(torch.long)
                 target_token_probs = target_probs[:, :spec_steps, :].gather(
@@ -407,9 +408,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                     if teacher_greedy:
                         corrected_token = correction_probs.argmax(dim=-1).to(torch.int32)
                     else:
-                        corrected_token = torch.multinomial(
-                            correction_probs, num_samples=1
-                        ).squeeze(-1).to(torch.int32)
+                        student_correction_probs = draft_token_probs_full[reject_rows, reject_ri]  # [n_reject, vocab]
+                        corrected_token = mix_correction(student_correction_probs, correction_probs, heights=opd_peak_heights[has_rejection]).to(torch.int32)
 
                     temp_predict[reject_rows, reject_ri] = corrected_token
                     if self.draft_token_full_probs is not None:
