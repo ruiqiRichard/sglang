@@ -2622,13 +2622,13 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     # numerical stability
     eps = torch.finfo(target_probs.dtype).tiny
     log_p_diff = torch.log(target_probs.clamp_min(eps)) - torch.log(draft_probs.clamp_min(eps))
-    ratios = (1.0 - torch.exp(log_p_diff)).clamp_(0.0, 1.0)
+    ratios = (1.0 - torch.exp(log_p_diff)).clamp(0.0, 1.0)
 
     keep_mask = ratios <= heights.view(-1, 1)
     correction_probs = draft_probs.masked_fill(~keep_mask, 0.0)
     correction_probs = correction_probs / correction_probs.sum(dim=-1, keepdim=True)
 
-    return torch.multinomial(correction_probs, num_samples=1).squeeze(-1)
+    return torch.multinomial(correction_probs, num_samples=1, replacement=True).squeeze(-1)
 
 def bind_or_assign(target, source):
     if target is not None:
