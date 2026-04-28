@@ -2621,12 +2621,37 @@ def peak_kl_rejection(draft_probs, target_probs, thresholds: torch.Tensor, heigh
 def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     # numerical stability
     eps = torch.finfo(target_probs.dtype).tiny
+    original_draft_probs = draft_probs
+
+    draft_entropy = -(
+        draft_probs * torch.log(draft_probs.clamp_min(eps))
+    ).sum(dim=-1)
+    N_eff = torch.ceil(torch.exp(draft_entropy)).clamp(max=draft_probs.size(-1)).to(
+        torch.long
+    )
     log_p_diff = torch.log(target_probs.clamp_min(eps)) - torch.log(draft_probs.clamp_min(eps))
     ratios = (1.0 - torch.exp(log_p_diff)).clamp(0.0, 1.0)
 
-    keep_mask = ratios <= heights.view(-1, 1)
+    sorted_draft_indices = torch.argsort(draft_probs, dim=-1, descending=True)
+    draft_rank = torch.empty_like(sorted_draft_indices)
+    draft_rank.scatter_(
+        dim=-1,
+        index=sorted_draft_indices,
+        src=torch.arange(draft_probs.size(-1), device=draft_probs.device).expand_as(
+            sorted_draft_indices
+        ),
+    )
+    top_n_eff_mask = draft_rank < N_eff.view(-1, 1)
+    keep_mask = (ratios <= heights.view(-1, 1)) & top_n_eff_mask
+
     correction_probs = draft_probs.masked_fill(~keep_mask, 0.0)
-    correction_probs = correction_probs / correction_probs.sum(dim=-1, keepdim=True)
+    correction_probs_sum = correction_probs.sum(dim=-1, keepdim=True)
+    use_draft_probs = correction_probs_sum <= 0
+    correction_probs = torch.where(
+        use_draft_probs,
+        original_draft_probs,
+        correction_probs / correction_probs_sum.clamp_min(eps),
+    )
 
     return torch.multinomial(correction_probs, num_samples=1, replacement=True).squeeze(-1)
 
