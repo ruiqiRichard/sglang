@@ -2622,14 +2622,13 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     # numerical stability
     eps = torch.finfo(target_probs.dtype).tiny
     original_draft_probs = draft_probs
-    original_draft_probs_max = draft_probs.max(dim=-1, keepdim=True).values
 
-    draft_entropy = -(
-        draft_probs * torch.log(draft_probs.clamp_min(eps))
-    ).sum(dim=-1)
-    N_eff = torch.ceil(torch.exp(draft_entropy)).clamp(max=draft_probs.size(-1)).to(
-        torch.long
-    )
+    # second-order Renyi entropy estimation to get effective support size
+    draft_collision_prob = torch.sum(draft_probs.square(), dim=-1).clamp_min(eps)
+    N_eff = torch.ceil(1.0 / draft_collision_prob).clamp(
+        max=draft_probs.size(-1)
+    ).to(torch.long)
+    
     log_p_diff = torch.log(target_probs.clamp_min(eps)) - torch.log(draft_probs.clamp_min(eps))
     ratios = (1.0 - torch.exp(log_p_diff)).clamp(0.0, 1.0)
 
@@ -2647,10 +2646,7 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
 
     correction_probs = draft_probs.masked_fill(~keep_mask, 0.0)
     correction_probs_sum = correction_probs.sum(dim=-1, keepdim=True)
-    correction_probs_max = correction_probs.max(dim=-1, keepdim=True).values
-    use_draft_probs = (correction_probs_sum <= 0) | (
-        correction_probs_max < original_draft_probs_max * 0.1
-    )
+    use_draft_probs = correction_probs_sum <= 0
     correction_probs = torch.where(
         use_draft_probs,
         original_draft_probs,
