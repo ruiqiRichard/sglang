@@ -2622,6 +2622,7 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     # numerical stability
     eps = torch.finfo(target_probs.dtype).tiny
     original_draft_probs = draft_probs
+    original_draft_probs_max = draft_probs.max(dim=-1, keepdim=True).values
 
     draft_entropy = -(
         draft_probs * torch.log(draft_probs.clamp_min(eps))
@@ -2646,7 +2647,10 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
 
     correction_probs = draft_probs.masked_fill(~keep_mask, 0.0)
     correction_probs_sum = correction_probs.sum(dim=-1, keepdim=True)
-    use_draft_probs = correction_probs_sum <= 0
+    correction_probs_max = correction_probs.max(dim=-1, keepdim=True).values
+    use_draft_probs = (correction_probs_sum <= 0) | (
+        correction_probs_max < original_draft_probs_max * 0.1
+    )
     correction_probs = torch.where(
         use_draft_probs,
         original_draft_probs,
