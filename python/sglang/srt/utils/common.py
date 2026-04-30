@@ -2628,7 +2628,7 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     N_eff = torch.ceil(1.0 / draft_collision_prob).clamp(
         max=draft_probs.size(-1)
     ).to(torch.long)
-    low_p = original_draft_probs.max(dim=-1, keepdim=True).values / N_eff.clamp_min(eps)
+    low_p = original_draft_probs.max(dim=-1, keepdim=True).values / N_eff.view(-1, 1).clamp_min(eps)
     
     log_p_diff = torch.log(target_probs.clamp_min(eps)) - torch.log(draft_probs.clamp_min(eps))
     ratios = (1.0 - torch.exp(log_p_diff)).clamp(0.0, 1.0)
