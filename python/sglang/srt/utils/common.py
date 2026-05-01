@@ -2629,6 +2629,8 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     N_eff = torch.ceil(torch.exp(draft_entropy)).clamp(max=draft_probs.size(-1)).to(
         torch.long
     )
+    low_p = original_draft_probs.max(dim=-1, keepdim=True).values / N_eff.view(-1, 1).clamp_min(eps)
+    
     log_p_diff = torch.log(target_probs.clamp_min(eps)) - torch.log(draft_probs.clamp_min(eps))
     ratios = (1.0 - torch.exp(log_p_diff)).clamp(0.0, 1.0)
 
@@ -2642,7 +2644,7 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
         ),
     )
     top_n_eff_mask = draft_rank < N_eff.view(-1, 1)
-    keep_mask = (ratios <= heights.view(-1, 1)) & top_n_eff_mask
+    keep_mask = (ratios <= heights.view(-1, 1)) & top_n_eff_mask & (draft_probs >= low_p)
 
     correction_probs = draft_probs.masked_fill(~keep_mask, 0.0)
     correction_probs_sum = correction_probs.sum(dim=-1, keepdim=True)
