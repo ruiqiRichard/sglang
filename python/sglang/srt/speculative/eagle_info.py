@@ -407,20 +407,16 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
 
                     if teacher_greedy:
                         corrected_token = correction_probs.argmax(dim=-1).to(torch.int32)
+                        corrected_prob = correction_probs.gather(
+                            dim=-1, index=corrected_token.to(torch.long).unsqueeze(-1)
+                        ).squeeze(-1)
                     else:
                         student_correction_probs = draft_token_probs_full[reject_rows, reject_ri]  # [n_reject, vocab]
-                        corrected_token = mix_correction(student_correction_probs, correction_probs, heights=opd_peak_heights[has_rejection]).to(torch.int32)
+                        corrected_token, corrected_prob = mix_correction(student_correction_probs, correction_probs, heights=opd_peak_heights[has_rejection])
+                        corrected_token = corrected_token.to(torch.int32)
 
                     temp_predict[reject_rows, reject_ri] = corrected_token
-                    if self.draft_token_full_probs is not None:
-                        corrected_draft_probs = self.draft_token_full_probs[
-                            reject_rows,
-                            reject_ri,
-                            corrected_token,
-                        ]
-                        draft_token_probs[
-                            reject_rows, reject_ri, 0
-                        ] = corrected_draft_probs
+                    draft_token_probs[reject_rows, reject_ri, 0] = corrected_prob
 
                 step_indices = torch.arange(draft_token_num, device=device, dtype=torch.long).unsqueeze(0)  # [1, draft_token_num]
                 ri_col = ri.unsqueeze(-1)  # [bs,1]

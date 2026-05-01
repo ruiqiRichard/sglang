@@ -2649,11 +2649,14 @@ def mix_correction(draft_probs, target_probs, heights: torch.Tensor):
     use_draft_probs = correction_probs_sum <= 0
     correction_probs = torch.where(
         use_draft_probs,
-        original_draft_probs,
+        draft_probs,
         correction_probs / correction_probs_sum.clamp_min(eps),
     )
 
-    return torch.multinomial(correction_probs, num_samples=1, replacement=True).squeeze(-1)
+    sampled_token = torch.multinomial(correction_probs, num_samples=1, replacement=True)
+    sampled_prob = correction_probs.gather(dim=-1, index=sampled_token).squeeze(-1)
+
+    return sampled_token.squeeze(-1), sampled_prob
 
 def bind_or_assign(target, source):
     if target is not None:
